@@ -94,6 +94,21 @@ Declare these in the box skill manifest so a fresh box pulls them: `productivity
 
 ---
 
+## Box scaffolding (the client MVP every box ships with)
+
+Beyond the runtime and channels, every box ships a small, consistent scaffolding so the agent is reliable and easy to hand off. This is the client MVP. Keep it lean.
+
+- **`SOUL.md`** (persona, covered above). The agent's stance, autonomy hard line, and prompt-injection hard line.
+- **`AGENTS.md`** (operating contract). The machine map of the box: where things live, how to behave, the hard rules. Distinct from `AI-AGENTS.md`, which is the install guide.
+- **`knowledge/`** (the client's domain facts). The per-client customization surface: `client-profile.md`, `deal-criteria.md` for real-estate clients, `key-people.md`. The agent reads the one that matches the task, on demand. Facts only, no secrets. Templates in `orgo/knowledge/`.
+- **`decisions/`** (box ADR log). Why the box is configured the way it is, so nobody re-litigates or "fixes" something intentional. Seeded with the baseline calls (Postgres, actor-only, supervised brain, skill-router, draft-first). Template in `orgo/decisions/`.
+- **`evals/`** (guardrail smoke tests). A handful of behavioral checks that prove the agent's safety holds (drafts not sends, refuses prompt injection, stops before spend, ingestion works, recovers on restart) before the box goes to the client. In `orgo/evals/`.
+- **Skill loading** (skill-router metaskill, separate branch). Skills load on demand, not preloaded, so context stays lean.
+
+What the MVP deliberately leaves out: a full automated eval harness, CI, and heavy per-client RAG tuning. Those come later. The MVP is the minimum that makes a box consistent, safe, and handoff-ready.
+
+---
+
 ## Provisioning order (new client box)
 
 1. `orgo/provision-client.py` + `INSTALL-CHECKLIST.md` → base box, Postgres brain, gateway, tunnel/console/dashboard, watchdog (per `STANDARDIZATION.md`).
@@ -103,6 +118,7 @@ Declare these in the box skill manifest so a fresh box pulls them: `productivity
 5. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
 6. Schedule the ingestion routines: `email-ingest` (hourly), `calendar-sync` (daily), and `ghl-sync` (4h) for CRM clients.
 7. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
+8. Fill the box scaffolding: `AGENTS.md` (as-is), `knowledge/` (from the templates, per client), `decisions/` (add any per-box notes). Run `evals/guardrails.md` against the agent before handing the box to the client.
 
 ---
 
