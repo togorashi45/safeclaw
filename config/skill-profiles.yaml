@@ -1,0 +1,97 @@
+# skill-profiles.yaml — config-driven skill loading for SafeClaw / Hermes.
+#
+# This is the single source of truth for WHICH skills ship on a box and which
+# are pinned "always on". tools/skills_manifest.py reads it, builds the
+# always-loaded SKILL_INDEX.md, and emits a keeplist the image build prunes to.
+# It replaces the hardcoded delete arrays in docker/prune-skills.sh.
+#
+# A profile can declare:
+#   keep_categories  allowlist of skill categories to keep (empty = keep all
+#                    except drop_categories)
+#   drop_categories  categories to delete (the basic-Hermes bloat)
+#   keep_skills      specific skill names to force-keep even if their category
+#                    is dropped
+#   drop_skills      specific skill names to force-drop even if their category
+#                    is kept (used for trust-boundary splits)
+#   auto_load        skill names pinned into the always-loaded index
+#   inherits         start from another profile; child keys override, and any
+#                    `<list>_add:` key extends the inherited list
+#
+# Categories come from each SKILL.md's metadata.hermes.category, or the top
+# folder of the skill path for untagged bundled skills.
+
+profiles:
+
+  # ── base ──────────────────────────────────────────────────────────────────
+  # Lean default for any SafeClaw box. Keeps the integration skills, the real
+  # estate pack, and the genuinely useful bundled packs. Drops the bundled
+  # bloat (the same set the old prune-skills.sh deleted, now declarative).
+  base:
+    description: Lean default for any SafeClaw box.
+    drop_categories:
+      - apple
+      - autonomous-ai-agents
+      - creative
+      - diagramming
+      - dogfood
+      - domain
+      - feeds
+      - gaming
+      - gifs
+      - index-cache
+      - inference-sh
+      - media
+      - mlops
+      - red-teaming
+      - smart-home
+      - research            # arxiv/polymarket/blogwatcher/llm-wiki noise
+    auto_load:
+      - skill-router        # the metaskill is always on
+
+  # ── reader ────────────────────────────────────────────────────────────────
+  # Read-only intake persona. Carries only the ingestion skills it needs and
+  # never the actor-only ones. Keeps idle context tiny.
+  reader:
+    inherits: base
+    description: Read-only intake gateway (Gmail + gbrain ingestion only).
+    keep_skills:
+      - email-to-brain
+      - calendar-to-brain
+    drop_skills:
+      - ghl-to-brain        # GHL belongs to the actor, not the reader
+
+  # ── actor ─────────────────────────────────────────────────────────────────
+  # Full-permission persona: decisions, sends, writes, CRM, real estate plays.
+  actor:
+    inherits: base
+    description: Full-permission actor (sends, writes, CRM, playbooks).
+
+  # ── team-member ───────────────────────────────────────────────────────────
+  # Template for a RE Reset team member's own box. Starts from the actor set,
+  # drops client-delivery real-estate playbooks they do not need, and is the
+  # base each named person inherits and narrows further.
+  team-member:
+    inherits: actor
+    description: Default skill set for a RE Reset team member box.
+
+  # Per-person profiles. First-pass keep/drop by role — CONFIRM with Jake and
+  # each person, then narrow. The point is each box ships only what that person
+  # uses, so their agent stays lean and their daily brief is fast. Each keeps the
+  # base integration skills (email/calendar to brain) via inheritance.
+  team-jillian:                 # bookkeeper — finance, reporting
+    inherits: team-member
+    description: Jillian (bookkeeper) — finance and reporting focus.
+    drop_categories_add: [real-estate, github, software-development, data-science, social-media]
+  team-kim:                     # executive assistant — calendar, inbox, docs
+    inherits: team-member
+    description: Kim (exec assistant) — calendar, inbox, scheduling, docs.
+    drop_categories_add: [real-estate, github, software-development, data-science, devops]
+  team-wren:                    # properties — keeps the real-estate pack
+    inherits: team-member
+    description: Wren (properties) — deal and property pipeline.
+    drop_categories_add: [github, software-development, data-science, devops]
+  team-elgin:                   # GHL + marketing — CRM + content
+    inherits: team-member
+    description: Elgin (GHL + marketing) — campaigns, CRM, content.
+    keep_skills_add: [ghl-to-brain]
+    drop_categories_add: [github, software-development, data-science, devops]
