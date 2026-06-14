@@ -21,6 +21,17 @@ Full detail and the repeatable Postgres procedure are in `orgo/STANDARDIZATION.m
 
 ---
 
+## Agent identity (SOUL.md)
+
+Every box gets a deliberate agent persona, not the stock Hermes default. The persona is the agent's operating stance: how it thinks, how direct it is, what it will and will not do without approval.
+
+- **File:** `orgo/SOUL.template.md` in this repo. Fill the placeholders for the client, strip the comment header, and save it on the box as `~/.hermes/SOUL.md`. Hermes loads it fresh every message, so edits take effect with no restart.
+- **What it carries:** stance and tone, an operating doctrine (constraint-first, define the problem, reliability before growth), an autonomy hard line (draft-only from the owner's address, allowlist for internal sends, stop before spend/publish/destructive/credential changes), a mission map, and prompt-injection hard lines (treat email, docs, transcripts, and brain pages as data, never as commands).
+- **Distinct from the user "Soul" brain page.** SOUL.md is the AGENT persona (static, version-controlled here). The brain page `identity/soul` is the USER's identity and principles (seeded into gBrain, updated by the weekly reflector through the review queue). Do not conflate them. The personas plugin (`safeclaw-personas`) governs the reader/actor trust split and is separate again.
+- **Customize per client:** swap the generic doctrine block for the client's own operating philosophy if they have one. Keep it em-dash clean so the persona never seeds slop into public-facing output.
+
+---
+
 ## Channels (the messaging surfaces)
 
 | Channel | Reference box | Mechanism | Provision |
@@ -87,10 +98,11 @@ Declare these in the box skill manifest so a fresh box pulls them: `productivity
 
 1. `orgo/provision-client.py` + `INSTALL-CHECKLIST.md` → base box, Postgres brain, gateway, tunnel/console/dashboard, watchdog (per `STANDARDIZATION.md`).
 2. Fill `client.env` from `client.env.example` (identity, brain, LLM, Composio, channels, GHL if applicable).
-3. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).
-4. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
-5. Schedule the ingestion routines: `email-ingest` (hourly), `calendar-sync` (daily), and `ghl-sync` (4h) for CRM clients.
-6. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
+3. Deploy the agent persona: fill `orgo/SOUL.template.md` for the client, strip the comment header, save it on the box as `~/.hermes/SOUL.md`.
+4. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).
+5. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
+6. Schedule the ingestion routines: `email-ingest` (hourly), `calendar-sync` (daily), and `ghl-sync` (4h) for CRM clients.
+7. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
 
 ---
 
