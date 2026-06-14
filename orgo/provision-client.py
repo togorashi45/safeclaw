@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Provision a new SafeClaw client on orgo.ai — one workspace, one computer.
+"""Provision a new SafeClaw client on orgo.ai, one workspace, one computer.
+
+=============================================================================
+SUPERSEDED 2026-06-14. Do not use the snapshot/Docker flow below.
+The supported install path is now `orgo/install-box.sh`, a from-scratch,
+idempotent installer that builds a vanilla box to green and injects secrets
+per box. We deliberately dropped the golden-snapshot clone (it goes stale on
+every version bump, bakes in secrets/state with cross-tenant risk, and was
+never proven end to end). See the DECISION note in ORGO-CLIENT-TEMPLATE.md
+and mind/conductor/CONDUCTOR.md.
+
+This file is kept only for the orgo workspace/computer REST helpers
+(create_workspace, create_computer, push_file) that a future automated
+box-creation wrapper around install-box.sh may reuse. The end-to-end flow
+in main() is no longer the path; treat it as reference, not a runbook.
+=============================================================================
 
 The "duplicate a workspace, configure for a new customer, keep going" flow:
 

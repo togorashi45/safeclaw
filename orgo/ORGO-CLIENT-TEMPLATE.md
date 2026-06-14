@@ -1790,8 +1790,14 @@ image — the native stack, profiles, Slack MCP build, watchdog, dream cron):
 
 ## Open items / not yet templated
 
-- **Golden snapshot not yet proven end-to-end** — the per-client clone path
-  (Step 14) is documented but unverified across a full second deploy.
+- **DECISION 2026-06-14: clean install template, not a baked snapshot.** The
+  per-client clone-from-snapshot path is dropped. A snapshot goes stale on every
+  version bump, bakes in secrets/state (cross-tenant risk), and was never proven
+  end to end. The supported path is now `orgo/install-box.sh`, a robust,
+  idempotent, from-scratch installer that builds a vanilla box to green and
+  injects secrets per box. Snapshotting a clean installer-built box is a future
+  speed-up only, if box volume ever demands it. `provision-client.py` (the old
+  Docker/snapshot flow) is superseded.
 - **Services are tmux-only, not boot-persistent** — after an unexpected
   suspend/resume the tmux sessions may need recreating. Fold supervisor / Node20 /
   dashboard / tunnel / Slack-MCP-build / dream-cron into the golden image + boot
