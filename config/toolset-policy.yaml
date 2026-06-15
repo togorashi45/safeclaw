@@ -1,0 +1,38 @@
+# Toolset policy (Part C of the lean loader: lazy tool-schema defer).
+#
+# Heavy MCP toolsets are NOT declared in the always-on actor config. They sit
+# here as "deferred" and get activated only when a chosen skill declares them in
+# its frontmatter `tools:` / `requires_toolsets:`. A few high-frequency toolsets
+# stay "hot" (always live). This keeps the idle prompt small even with thousands
+# of tools available (the GHL servers alone are ~500-600 tools).
+#
+# tools/toolset_loader.py reads this to answer "what MCP servers do I activate
+# for skill X" and "what is deferred right now".
+
+# Always live in every actor session (small, used constantly).
+hot:
+  - brain            # gbrain read/write (the agent's memory)
+  - composio-connect # onboarding connect-link tool (small, 2 tools)
+
+# Deferred: present on the box, loaded on demand when a skill needs them.
+deferred:
+  ghl:
+    description: GoHighLevel CRM. ~500-600 tools. Load only for CRM skills.
+    mcp: ghl                       # the MCP server name as wired on the box
+  composio-actor:
+    description: Full Composio actor toolset (Gmail send/draft, Calendar, Drive, Slack).
+    mcp: composio-actor
+  composio-reader:
+    description: Full Composio reader toolset (Gmail read, Calendar read).
+    mcp: composio-reader
+
+# Map a declared skill toolset name to the deferred entry it activates.
+# Skills use short names in frontmatter `tools:`; this resolves them.
+aliases:
+  gmail-read: composio-reader
+  gmail: composio-actor
+  calendar: composio-actor
+  drive: composio-actor
+  slack: composio-actor
+  crm: ghl
+  ghl: ghl

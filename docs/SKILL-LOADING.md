@@ -127,11 +127,36 @@ Build reader and actor variants by passing `--build-arg SKILL_PROFILE=reader`
 vs `actor`. Verify the image starts and `SKILL_INDEX.md` lands in the skills
 volume before shipping to a box.
 
-## Scaling past a few hundred skills
+## Part B (built): pgvector skill retrieval
 
-The directory stays cheap into the low hundreds of skills (~80 tokens each).
-Past that, stop keeping every line resident: embed each description into pgvector
-(already in the stack) and expose one `find_skill(query)` tool that returns the
-top matches. `skills.index.json` is the input for that retrieval layer. Match
-category first, then skill within it. Pin the few highest-frequency skills so
-common paths skip the search hop.
+The directory stays cheap into the low hundreds of skills (~80 tokens each). Past
+that, the router stops reading the whole index and calls `find_skill(query)`.
+
+- `tools/skill_index_embed.py` reads `skills.index.json`, embeds each kept skill's
+  "name: description" with the brain's embedding model, and upserts into a
+  `skill_index` pgvector table in the box brain.
+- `tools/find-skill-mcp/server.py` is a stdio MCP exposing `find_skill(query, k,
+  boundary)`. It embeds the query and returns the top matches (name, path,
+  boundary, description). The router reads the returned path's SKILL.md to run it.
+
+Build it after pruning a profile:
+```bash
+python3 tools/skills_manifest.py --profile actor --skills-dir /opt/hermes/skills --out /opt/hermes/.skill-manifest
+python3 tools/skill_index_embed.py --index /opt/hermes/.skill-manifest/skills.index.json
+```
+Wire `find-skill` into the actor profile like any stdio MCP. Pin the few
+highest-frequency skills (`auto_load: true`) so common paths skip the search hop.
+
+## Part C (built): lazy tool-schema defer
+
+Heavy MCP toolsets (the GHL servers are ~500-600 tools) never sit in the idle
+prompt. `config/toolset-policy.yaml` declares `hot` toolsets (always live, small)
+and `deferred` ones (loaded on demand). `tools/toolset_loader.py` resolves a
+chosen skill's frontmatter `tools:` to the deferred toolsets to activate:
+```bash
+tools/toolset_loader.py audit                 # what is hot vs deferred
+tools/toolset_loader.py for-skill skills.index.json ghl-to-brain   # what that skill needs
+```
+The router activates a toolset only when a chosen skill declares it. VERIFY on a
+box: the hot-load of a deferred MCP server into the running gateway (reload vs
+restart).

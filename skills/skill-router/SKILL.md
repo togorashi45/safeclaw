@@ -21,7 +21,9 @@ right skill without every skill sitting in your context.
 
 1. Read `SKILL_INDEX.md` (generated next to this file, or at the manifest path
    the box was built with). It is the directory of every skill on this box: one
-   line each, with a description and a path.
+   line each, with a description and a path. If this box carries hundreds of
+   skills and the `find_skill` tool is available, call `find_skill(query)`
+   instead of reading the whole index, then use the path it returns.
 2. Match the user's request to the single closest skill by its description.
 3. Read that skill's `SKILL.md` (its `path`), then follow it. Read a skill's
    referenced files only when its body points to them.
