@@ -141,17 +141,20 @@ stage_composio_project() {
   # high-privilege org key on a tenant box; mint, then SCRUB it immediately.
   if [ -n "$COMPOSIO_ORG_API_KEY" ]; then
     echo "WARN: minting on-box with the ORG key. Prefer off-box (composio-mint-project.sh). Scrubbing the org key from install.env after."
-    local API="https://backend.composio.dev/api/v3.1/org/owner" pid key
+    local API="https://backend.composio.dev/api/v3.1/org/owner" pid key resp
+    # config is REQUIRED on create; log_visibility_setting enum: show_all | dont_store_data.
+    local CFG='{"is_2FA_enabled":false,"mask_secret_keys_in_connected_account":true,"log_visibility_setting":"show_all"}'
     pid=$(curl -s -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" "$API/project/list" \
           | jq -r --arg n "$COMPOSIO_PROJECT" '(.data // [])[] | select(.name==$n) | .id' | head -1)
     if [ -n "$pid" ] && [ "$pid" != null ]; then
-      key=$(curl -s -X POST -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" "$API/project/$pid/regenerate_api_key" | jq -r '.api_key.key // .api_key // .key')
-    else
-      local resp; resp=$(curl -s -X POST -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" -H "Content-Type: application/json" \
-             -d "{\"name\":\"$COMPOSIO_PROJECT\",\"should_create_api_key\":true,\"config\":{}}" "$API/project/new")
-      pid=$(echo "$resp" | jq -r '.id // .nano_id'); key=$(echo "$resp" | jq -r '.api_key.key // .api_key // .key')
+      echo "FAIL: Composio project '$COMPOSIO_PROJECT' already exists ($pid) but its key cannot be retrieved (shown only at creation; regeneration disabled for this org). Inject COMPOSIO_API_KEY directly, or delete the project and re-run."; return 1
     fi
-    if [ -z "$key" ] || [ "$key" = null ]; then echo "FAIL: no Composio project key returned (check org key)."; return 1; fi
+    resp=$(curl -s -X POST -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" -H "Content-Type: application/json" \
+           -d "{\"name\":\"$COMPOSIO_PROJECT\",\"should_create_api_key\":true,\"config\":$CFG}" "$API/project/new")
+    pid=$(echo "$resp" | jq -r '.id // .nano_id // empty')
+    # api_key may be a bare string OR an object {key:...}.
+    key=$(echo "$resp" | jq -r '(.api_key | if type=="object" then .key else . end) // empty')
+    if [ -z "$key" ] || [ "$key" = null ]; then echo "FAIL: no Composio project key in response:"; echo "$resp" | jq -c '.error // .'; return 1; fi
     { echo "COMPOSIO_API_KEY=$key"; echo "COMPOSIO_PROJECT_ID=$pid"; echo "COMPOSIO_PROJECT_NAME=$COMPOSIO_PROJECT"; } >> "$BRAIN/.env"
     chmod 600 "$BRAIN/.env"
     export COMPOSIO_API_KEY="$key"

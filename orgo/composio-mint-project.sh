@@ -24,24 +24,34 @@ ENVOUT="${2:-}"
 
 API="https://backend.composio.dev/api/v3.1/org/owner"
 hdr=(-H "x-org-api-key: $COMPOSIO_ORG_API_KEY")
+# config is REQUIRED on create (verified live). log_visibility_setting enum is
+# 'show_all' | 'dont_store_data'. Secrets masked in connected accounts.
+CONFIG='{"is_2FA_enabled":false,"mask_secret_keys_in_connected_account":true,"log_visibility_setting":"show_all"}'
 
-pid=$(curl -s "${hdr[@]}" "$API/project/list" \
-      | jq -r --arg n "$NAME" '(.data // [])[] | select(.name==$n) | .id' | head -1)
-
-if [ -n "$pid" ] && [ "$pid" != null ]; then
-  key=$(curl -s -X POST "${hdr[@]}" "$API/project/$pid/regenerate_api_key" \
-        | jq -r '.api_key.key // .api_key // .key')
-  echo "# reused existing Composio project '$NAME' ($pid); key regenerated" >&2
-else
-  resp=$(curl -s -X POST "${hdr[@]}" -H "Content-Type: application/json" \
-         -d "{\"name\":\"$NAME\",\"should_create_api_key\":true,\"config\":{}}" \
-         "$API/project/new")
-  pid=$(echo "$resp" | jq -r '.id // .nano_id')
-  key=$(echo "$resp" | jq -r '.api_key.key // .api_key // .key')
-  echo "# created Composio project '$NAME' ($pid)" >&2
+# A project key is shown ONLY at creation, and key regeneration is DISABLED for
+# this org, so an existing project's key cannot be retrieved here. If the project
+# already exists, stop and tell the operator (reuse the stashed key, or delete + rerun).
+existing=$(curl -s "${hdr[@]}" "$API/project/list" \
+           | jq -r --arg n "$NAME" '(.data // [])[] | select(.name==$n) | .id' | head -1)
+if [ -n "$existing" ] && [ "$existing" != null ]; then
+  cat >&2 <<MSG
+FAIL: Composio project '$NAME' already exists ($existing).
+Its key cannot be fetched (shown only at creation; regeneration disabled for this org).
+Reuse the key you stashed at creation, or delete the project and re-run:
+  curl -s -X DELETE -H "x-org-api-key: \$COMPOSIO_ORG_API_KEY" "$API/project/$existing"
+MSG
+  exit 1
 fi
 
-[ -n "${key:-}" ] && [ "$key" != null ] || { echo "FAIL: no project key returned (check org key + response)" >&2; exit 1; }
+resp=$(curl -s "${hdr[@]}" -H "Content-Type: application/json" \
+       -d "{\"name\":\"$NAME\",\"should_create_api_key\":true,\"config\":$CONFIG}" \
+       "$API/project/new")
+pid=$(echo "$resp" | jq -r '.id // .nano_id // empty')
+# api_key may be a bare string OR an object {key:...}; handle both.
+key=$(echo "$resp" | jq -r '(.api_key | if type=="object" then .key else . end) // empty')
+echo "# created Composio project '$NAME' ($pid)" >&2
+
+[ -n "${key:-}" ] && [ "$key" != null ] || { echo "FAIL: no project key in create response:" >&2; echo "$resp" | jq -c '.error // .' >&2; exit 1; }
 
 out=$(printf 'COMPOSIO_API_KEY=%s\nCOMPOSIO_PROJECT_ID=%s\nCOMPOSIO_PROJECT_NAME=%s\n' "$key" "$pid" "$NAME")
 echo "$out"
