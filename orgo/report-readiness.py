@@ -108,11 +108,14 @@ def push_portal_tile(results):
     url = _get("PORTAL_TELEMETRY_URL")
     if not url:
         return ("portal_tile", False, "no PORTAL_TELEMETRY_URL (Package F not wired yet)")
-    token = _get("PORTAL_TELEMETRY_TOKEN")
+    token = _get("PORTAL_TELEMETRY_TOKEN")  # the portal INGEST_SECRET
     try:
-        status, _ = http_json(url, payload={"box": _get("CLIENT_SLUG", "box"),
-                                            "checks": {k: ok for (k, ok, _m) in results}},
-                              headers={"Authorization": f"Bearer {token}"} if token else {})
+        status, _ = http_json(url, payload={
+            "secret": token,
+            "box": _get("CLIENT_SLUG", "box"),
+            "version": _get("BOX_VERSION", ""),
+            "checks": {k: ok for (k, ok, _m) in results},
+        })
         return ("portal_tile", status in (200, 201), f"HTTP {status}")
     except Exception as e:
         return ("portal_tile", False, str(e))
