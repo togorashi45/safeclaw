@@ -40,7 +40,9 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${GITHUB_TOKEN:=}"                       # to clone the private safeclaw repo
 : "${OPENROUTER_API_KEY:=}"                 # gbrain embeddings + dream
 : "${OLLAMA_API_KEY:=}"                     # hermes model provider
-: "${COMPOSIO_API_KEY:=}"                   # optional: gmail/calendar senses
+: "${COMPOSIO_API_KEY:=}"                   # PROJECT key (preferred: minted off-box, injected here)
+: "${COMPOSIO_ORG_API_KEY:=}"               # ORG key; ONLY for on-box fallback mint (prefer off-box)
+: "${COMPOSIO_PROJECT:=${CLIENT_SLUG}}"     # per-box Composio project name (one project per box = isolation)
 : "${WHATSAPP_ALLOWED_USERS:=}"            # set at onboarding (Kim's number)
 
 REPO=/opt/safeclaw
@@ -114,6 +116,51 @@ EOF
   fi
   ( cd "$BRAIN/repo" && git init -q 2>/dev/null; git config user.email brain@rereset.local; git config user.name brain )
   supervisorctl reread; supervisorctl update; supervisorctl start postgres-brain 2>/dev/null || true
+}
+
+# =============================================================================
+stage_composio_project() {
+  say "STAGE composio_project: isolated Composio project + key for '$COMPOSIO_PROJECT'"
+  mkdir -p "$BRAIN"
+  # Idempotent: a project key already on this box wins; never re-mint over a live one.
+  if [ -f "$BRAIN/.env" ] && grep -q '^COMPOSIO_API_KEY=' "$BRAIN/.env"; then
+    echo "exists: COMPOSIO_API_KEY already in $BRAIN/.env; leaving as-is."; return 0
+  fi
+  # PREFERRED PATH: the project key was minted OFF-BOX (composio-mint-project.sh on
+  # the provisioner) and injected via install.env. Just persist it; the org key
+  # never came near this box.
+  if [ -n "$COMPOSIO_API_KEY" ]; then
+    { echo "COMPOSIO_API_KEY=$COMPOSIO_API_KEY"
+      [ -n "${COMPOSIO_PROJECT_ID:-}" ] && echo "COMPOSIO_PROJECT_ID=$COMPOSIO_PROJECT_ID"
+      echo "COMPOSIO_PROJECT_NAME=$COMPOSIO_PROJECT"; } >> "$BRAIN/.env"
+    chmod 600 "$BRAIN/.env"
+    echo "persisted pre-minted Composio project key to $BRAIN/.env (off-box mint, clean isolation)."
+    return 0
+  fi
+  # FALLBACK PATH: only the org key is on the box. This works but puts a
+  # high-privilege org key on a tenant box; mint, then SCRUB it immediately.
+  if [ -n "$COMPOSIO_ORG_API_KEY" ]; then
+    echo "WARN: minting on-box with the ORG key. Prefer off-box (composio-mint-project.sh). Scrubbing the org key from install.env after."
+    local API="https://backend.composio.dev/api/v3.1/org/owner" pid key
+    pid=$(curl -s -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" "$API/project/list" \
+          | jq -r --arg n "$COMPOSIO_PROJECT" '(.data // [])[] | select(.name==$n) | .id' | head -1)
+    if [ -n "$pid" ] && [ "$pid" != null ]; then
+      key=$(curl -s -X POST -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" "$API/project/$pid/regenerate_api_key" | jq -r '.api_key.key // .api_key // .key')
+    else
+      local resp; resp=$(curl -s -X POST -H "x-org-api-key: $COMPOSIO_ORG_API_KEY" -H "Content-Type: application/json" \
+             -d "{\"name\":\"$COMPOSIO_PROJECT\",\"should_create_api_key\":true,\"config\":{}}" "$API/project/new")
+      pid=$(echo "$resp" | jq -r '.id // .nano_id'); key=$(echo "$resp" | jq -r '.api_key.key // .api_key // .key')
+    fi
+    if [ -z "$key" ] || [ "$key" = null ]; then echo "FAIL: no Composio project key returned (check org key)."; return 1; fi
+    { echo "COMPOSIO_API_KEY=$key"; echo "COMPOSIO_PROJECT_ID=$pid"; echo "COMPOSIO_PROJECT_NAME=$COMPOSIO_PROJECT"; } >> "$BRAIN/.env"
+    chmod 600 "$BRAIN/.env"
+    export COMPOSIO_API_KEY="$key"
+    # Scrub the org key so it does not persist on the tenant box.
+    [ -f "$ENV_FILE" ] && sed -i.bak -E '/^COMPOSIO_ORG_API_KEY=/d' "$ENV_FILE" && rm -f "$ENV_FILE.bak" && unset COMPOSIO_ORG_API_KEY
+    echo "minted '$COMPOSIO_PROJECT' ($pid) on-box; project key stored, org key scrubbed from $ENV_FILE."
+    return 0
+  fi
+  echo "SKIP: no COMPOSIO_API_KEY (off-box mint) and no COMPOSIO_ORG_API_KEY (on-box mint). Composio senses will be unwired."
 }
 
 # =============================================================================
@@ -237,7 +284,7 @@ stage_verify() {
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base brain_db repo runtime brain_init hermes_config identity skills channels gateway verify)
+ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels gateway verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
