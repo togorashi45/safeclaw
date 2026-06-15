@@ -283,11 +283,27 @@ stage_verify() {
   echo "supervisor:"; supervisorctl status 2>/dev/null || true
   echo "postgres:"; sudo -u postgres psql -d brain -tAc "SELECT count(*) FROM pg_extension WHERE extname='vector';" 2>/dev/null
   have gbrain && gbrain query "$CLIENT_SLUG" 2>/dev/null | head -3 || echo "gbrain not ready"
+  # Stage 5 report: health checks + seed first task + Slack note + portal tile.
+  if [ -f "$REPO/orgo/report-readiness.py" ]; then
+    CLIENT_SLUG="$CLIENT_SLUG" python3 "$REPO/orgo/report-readiness.py" --no-seed || echo "VERIFY: report-readiness (seed/slack/portal env on first run)"
+  fi
   echo "READINESS: brain extension present, supervisor programs up, SOUL deployed, skills profile applied."
 }
 
+# =============================================================================
+stage_onboard() {
+  say "STAGE onboard: wire connect MCP + start agent-driven onboarding"
+  [ -d "$REPO/orgo/onboarding/composio-connect-mcp" ] || { echo "SKIP: onboarding kit not in repo"; return 0; }
+  pip3 install --break-system-packages -r "$REPO/orgo/onboarding/composio-connect-mcp/requirements.txt" 2>/dev/null \
+    || echo "VERIFY: composio-connect-mcp deps (mcp, composio)"
+  echo "NOTE: wire the composio-connect MCP into the actor profile per $REPO/orgo/onboarding/composio-connect-mcp/README.md (mcp_servers: composio-connect)."
+  # Kickoff is fired by the orchestrator (Package A) once the box is confirmed green,
+  # so it does not run as part of a bare install. Run manually with:
+  echo "NOTE: start onboarding with: bash $REPO/orgo/onboarding/onboarding-kickoff.sh"
+}
+
 # ---- driver ----------------------------------------------------------------
-ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels gateway verify)
+ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels onboard gateway verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
