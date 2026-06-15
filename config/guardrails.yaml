@@ -1,0 +1,47 @@
+# Dangerous-verb gate (Package E). Machine-readable policy the agent consults
+# (via orgo/security/guard.py) before any action that leaves the building, spends,
+# or destroys. Builds on the existing review-queue approval surface (the same
+# place soul_update proposals get a human approval reaction).
+#
+# Decision per action: allow | gate | deny.
+#   allow  the agent proceeds (low-risk internal work).
+#   gate   the agent enqueues an approval and BLOCKS until a human approves.
+#   deny   never, regardless of approval (hard line).
+
+# Verbs that always require human approval before executing.
+gate_verbs:
+  - external_email_send      # sending to anyone outside the allowlist
+  - sms_send                 # any outbound SMS
+  - external_message         # Slack/WhatsApp to a non-allowlisted person or channel
+  - spend                    # any paid API call, purchase, subscription, paid data
+  - delete                   # deleting records, files, or data
+  - bulk                     # any action touching many records at once (>= bulk_threshold)
+  - publish                  # posting/publishing content externally
+  - credential_change        # changing creds, permissions, or security settings
+
+# Verbs the agent may never do, approval or not.
+deny_verbs:
+  - send_from_principal_address_unapproved   # sending from the principal's locked address without the explicit per-message ok
+  - exfiltrate_secrets                        # putting secrets into chat, a brain page, or an external sink
+
+bulk_threshold: 10
+
+# Scope by trust boundary. Reader is read-only; it may not run any gate_verb.
+boundaries:
+  reader:
+    allow_verbs_only: [read, search, summarize, draft]
+  actor:
+    # actor may do low-risk internal work freely; gate_verbs still gate.
+    free_verbs: [draft, read, search, summarize, schedule_internal, brain_write]
+
+# Per-principal autonomy ceiling can tighten this at onboarding (D13 answer),
+# written to brain identity/soul. Tighter overrides looser; it can move an
+# allow to a gate, never a deny to an allow.
+autonomy_ceiling_source: "brain:identity/soul#autonomy"
+
+# Where approvals surface (reuse the review-queue + reaction approval flow).
+approval:
+  mechanism: review_queue
+  action_type: dangerous_verb
+  notify: [slack, whatsapp]      # ping the approver on these channels
+  approvers_source: "SOUL:{{ALLOWLIST}}"   # who can approve (default Jake + principal)
