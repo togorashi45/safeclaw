@@ -58,22 +58,36 @@ say() { echo; echo "---- $* ----"; }
 stage_base() {
   say "STAGE base: system packages"
   export DEBIAN_FRONTEND=noninteractive
+  # Full PATH incl sbin: orgo's non-interactive shell drops /usr/sbin+/sbin, which
+  # breaks dpkg (start-stop-daemon) and every downstream install (validated live 2026-06-16).
+  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin
+  echo 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin' >/etc/profile.d/00-fullpath.sh
+  grep -q 'usr/sbin' /root/.bashrc 2>/dev/null || echo 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin' >>/root/.bashrc
+  # Orgo boxes often boot days behind, so apt rejects repo metadata as "not valid yet".
+  # Try NTP, and tell apt to ignore the date regardless (validated live 2026-06-16).
+  timedatectl set-ntp true 2>/dev/null || true
+  local APT="-o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false"
   # Flaky third-party repos on the stock Orgo image break apt update (learned live).
   for f in /etc/apt/sources.list.d/*sublime* /etc/apt/sources.list.d/*google-chrome*; do
     [ -e "$f" ] && mv "$f" "$f.disabled" 2>/dev/null || true
   done
-  apt-get update -y --fix-missing
-  apt-get install -y --fix-missing \
-    git curl jq unzip build-essential python3-pip openssl supervisor \
-    "postgresql-${PGV}" "postgresql-${PGV}-pgvector"
+  apt-get $APT update -y --fix-missing || true
+  apt-get $APT install -y --fix-missing \
+    git curl jq unzip xz-utils build-essential python3-pip openssl supervisor \
+    "postgresql-${PGV}" "postgresql-${PGV}-pgvector" || true
+  # xz fallback via direct .deb if the resolver balked on a broken libc6-dev state (learned live).
+  if ! have xz; then ( cd /tmp && apt-get $APT download xz-utils 2>/dev/null && dpkg -i xz-utils*.deb 2>/dev/null ) || true; fi
   # bun (gbrain runs under bun; shebang is #!/usr/bin/env bun, symlink required).
   if ! have bun; then curl -fsSL https://bun.sh/install | bash; fi
   ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-  # Node 20 (stock image ships 18; setup-hermes.sh + dashboard build want 20).
+  # Node 20 (stock image ships 18; setup-hermes.sh + dashboard build want 20). Prefer
+  # .tar.xz, fall back to .tar.gz so a missing xz never blocks node (learned live).
   if [ "$(node -v 2>/dev/null | cut -c2-3)" != "20" ]; then
-    curl -fsSL -o /tmp/node20.tar.xz https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-x64.tar.xz
-    tar -xJf /tmp/node20.tar.xz -C /opt && ln -sf /opt/node-v20.18.1-linux-x64/bin/node /usr/local/bin/node
+    if have xz; then curl -fsSL -o /tmp/node20.tar.xz https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-x64.tar.xz && tar -xJf /tmp/node20.tar.xz -C /opt
+    else curl -fsSL -o /tmp/node20.tar.gz https://nodejs.org/dist/v20.18.1/node-v20.18.1-linux-x64.tar.gz && tar -xzf /tmp/node20.tar.gz -C /opt; fi
+    ln -sf /opt/node-v20.18.1-linux-x64/bin/node /usr/local/bin/node
     ln -sf /opt/node-v20.18.1-linux-x64/bin/npm /usr/local/bin/npm
+    ln -sf /opt/node-v20.18.1-linux-x64/bin/npx /usr/local/bin/npx
   fi
   # cloudflared (only needed if a web tunnel is wanted; harmless to have).
   have cloudflared || { curl -fsSL -o /usr/local/bin/cloudflared \
