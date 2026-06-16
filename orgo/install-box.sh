@@ -263,6 +263,12 @@ stage_channels() {
   # The bridge ships with Hermes. Kim gives his number + scans the QR at onboarding.
   local BR=/opt/hermes/scripts/whatsapp-bridge/bridge.js
   if [ -f "$BR" ]; then
+    # The bridge imports @whiskeysockets/baileys; its node_modules must be
+    # installed or it crash-loops with ERR_MODULE_NOT_FOUND (validated live 2026-06-16).
+    if [ ! -d /opt/hermes/scripts/whatsapp-bridge/node_modules ]; then
+      ( cd /opt/hermes/scripts/whatsapp-bridge && npm install --no-audit --no-fund 2>&1 | tail -3 ) \
+        || echo "VERIFY: whatsapp-bridge npm install"
+    fi
     cat >/etc/supervisor/conf.d/whatsapp-bridge.conf <<EOF
 [program:whatsapp-bridge]
 command=/usr/local/bin/node $BR
@@ -270,6 +276,7 @@ environment=WHATSAPP_ALLOWED_USERS="${WHATSAPP_ALLOWED_USERS:-*}"
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/whatsapp-bridge.log
+stderr_logfile=/var/log/whatsapp-bridge.err
 EOF
     supervisorctl reread; supervisorctl update
     echo "WhatsApp bridge configured. Scan the QR in /var/log/whatsapp-bridge.log to pair."
@@ -282,12 +289,15 @@ EOF
 # =============================================================================
 stage_gateway() {
   say "STAGE gateway: consolidated hermes-gateway-actor"
+  # HERMES_ALLOW_ROOT_GATEWAY=1: orgo boxes run as root; without it the gateway
+  # refuses to start ("Refusing to run as root", validated live 2026-06-16).
   cat >/etc/supervisor/conf.d/hermes-gateway-actor.conf <<'EOF'
 [program:hermes-gateway-actor]
-command=/bin/bash -lc 'cd /root/.hermes && hermes gateway run'
+command=/bin/bash -lc 'cd /root/.hermes && HERMES_ALLOW_ROOT_GATEWAY=1 hermes gateway run'
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/hermes-gateway.log
+stderr_logfile=/var/log/hermes-gateway.err
 EOF
   supervisorctl reread; supervisorctl update; supervisorctl start hermes-gateway-actor 2>/dev/null || true
 }
