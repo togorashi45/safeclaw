@@ -115,7 +115,11 @@ EOF
     chmod 600 "$BRAIN/.env"
   fi
   ( cd "$BRAIN/repo" && git init -q 2>/dev/null; git config user.email brain@rereset.local; git config user.name brain )
-  supervisorctl reread; supervisorctl update; supervisorctl start postgres-brain 2>/dev/null || true
+  # Hand Postgres to supervisor: stop the manually-started cluster first, else both
+  # bind :5432 and the supervised one backoff-loops (validated live 2026-06-16).
+  pg_ctlcluster "$PGV" main stop 2>/dev/null || true
+  supervisorctl reread; supervisorctl update
+  supervisorctl restart postgres-brain 2>/dev/null || supervisorctl start postgres-brain 2>/dev/null || true
 }
 
 # =============================================================================
@@ -182,14 +186,25 @@ stage_repo() {
 stage_runtime() {
   say "STAGE runtime: gbrain + hermes"
   [ -d "$REPO" ] || { echo "SKIP: repo not present (run stage_repo)"; return 0; }
-  # gbrain: clone (if vendored install script absent), bun install + link.
+  # Full PATH incl sbin: the orgo non-interactive shell drops /usr/sbin+/sbin, which
+  # breaks dpkg (start-stop-daemon) and downstream installs (validated live 2026-06-16).
+  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin
+  # bun is gbrain's runtime. gbrain's shebang is #!/usr/bin/env bun, so bun MUST be
+  # globally symlinked or every non-interactive gbrain spawn dies (issue 21).
+  have bun || { curl -fsSL https://bun.sh/install | bash; }
+  [ -x /root/.bun/bin/bun ] && ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+  # gbrain: cloned + built from source (github.com/garrytan/gbrain), then symlinked
+  # globally. There is NO vendored install script; this is the canonical method from
+  # ORGO-CLIENT-TEMPLATE.md Step 1 (the old orgo/setup/install-gbrain.sh path never existed).
   if ! have gbrain; then
-    bash "$REPO/orgo/setup/install-gbrain.sh" 2>/dev/null || echo "VERIFY: gbrain install path (orgo/setup/install-gbrain.sh)"
-    ln -sf "$(bun pm bin -g 2>/dev/null)/gbrain" /usr/local/bin/gbrain 2>/dev/null || true
+    [ -d /opt/gbrain-src/.git ] || git clone https://github.com/garrytan/gbrain.git /opt/gbrain-src
+    ( cd /opt/gbrain-src && bun install && bun link )
+    ln -sf "$(command -v gbrain 2>/dev/null || echo /root/.bun/bin/gbrain)" /usr/local/bin/gbrain 2>/dev/null || true
   fi
-  # hermes: setup-hermes.sh BARE (a pipe masks the exit code, issue 4).
+  # hermes: setup-hermes.sh lives at scripts/ (NOT orgo/setup/). Run BARE so a pipe
+  # cannot mask its exit code (issue 4).
   if ! have hermes; then
-    bash "$REPO/orgo/setup/setup-hermes.sh" || echo "VERIFY: setup-hermes.sh exit + symlink (/opt/hermes/venv/bin/hermes or ~/.local/bin/hermes)"
+    bash "$REPO/scripts/setup-hermes.sh" || echo "VERIFY: setup-hermes.sh exit + symlink"
   fi
   echo "runtime: $(which gbrain hermes bun 2>/dev/null)"
 }
