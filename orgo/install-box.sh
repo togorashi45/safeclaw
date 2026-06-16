@@ -43,7 +43,8 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${COMPOSIO_API_KEY:=}"                   # PROJECT key (preferred: minted off-box, injected here)
 : "${COMPOSIO_ORG_API_KEY:=}"               # ORG key; ONLY for on-box fallback mint (prefer off-box)
 : "${COMPOSIO_PROJECT:=${CLIENT_SLUG}}"     # per-box Composio project name (one project per box = isolation)
-: "${WHATSAPP_ALLOWED_USERS:=}"            # set at onboarding (Kim's number)
+: "${WHATSAPP_ALLOWED_USERS:=}"            # set at onboarding (the principal's number)
+: "${WHATSAPP_MODE:=bot}"                   # bot = dedicated box number the principal texts; self-chat = link their own
 
 REPO=/opt/safeclaw
 BRAIN=/opt/brain
@@ -272,7 +273,7 @@ stage_channels() {
     cat >/etc/supervisor/conf.d/whatsapp-bridge.conf <<EOF
 [program:whatsapp-bridge]
 command=/usr/local/bin/node $BR
-environment=WHATSAPP_ALLOWED_USERS="${WHATSAPP_ALLOWED_USERS:-*}"
+environment=WHATSAPP_ALLOWED_USERS="${WHATSAPP_ALLOWED_USERS:-*}",WHATSAPP_MODE="${WHATSAPP_MODE:-bot}"
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/whatsapp-bridge.log
