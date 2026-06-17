@@ -45,6 +45,8 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${COMPOSIO_PROJECT:=${CLIENT_SLUG}}"     # per-box Composio project name (one project per box = isolation)
 : "${WHATSAPP_ALLOWED_USERS:=}"            # set at onboarding (the principal's number)
 : "${WHATSAPP_MODE:=bot}"                   # bot = dedicated box number the principal texts; self-chat = link their own
+: "${AGENTMAIL_INBOX:=}"                     # this box's own email address (off-box minted)
+: "${AGENTMAIL_API_KEY:=}"                   # INBOX-SCOPED key (never the org key); mint via orgo/agentmail-provision.sh
 
 REPO=/opt/safeclaw
 BRAIN=/opt/brain
@@ -302,6 +304,22 @@ EOF
 }
 
 # =============================================================================
+stage_email() {
+  say "STAGE email: wire agentmail MCP (the agent's own email identity)"
+  if [ -z "${AGENTMAIL_API_KEY:-}" ] || [ -z "${AGENTMAIL_INBOX:-}" ]; then
+    echo "SKIP: AGENTMAIL_API_KEY (inbox-scoped) + AGENTMAIL_INBOX needed; mint off-box via orgo/agentmail-provision.sh"; return 0
+  fi
+  local SRV="$REPO/orgo/onboarding/agentmail-mcp/server.py"
+  [ -f "$SRV" ] || { echo "SKIP: agentmail MCP not in repo"; return 0; }
+  # Run the MCP under the hermes venv python: system pip cannot install 'mcp'
+  # (debian typing_extensions conflict), but the venv already has it (validated live).
+  printf 'y\n' | hermes mcp add agentmail \
+    --env AGENTMAIL_API_KEY="$AGENTMAIL_API_KEY" AGENTMAIL_INBOX="$AGENTMAIL_INBOX" \
+    --command /opt/hermes/venv/bin/python3 --args "$SRV" 2>&1 | tail -3 \
+    || echo "VERIFY: hermes mcp add agentmail"
+}
+
+# =============================================================================
 stage_gateway() {
   say "STAGE gateway: consolidated hermes-gateway-actor"
   # HERMES_ALLOW_ROOT_GATEWAY=1: orgo boxes run as root; without it the gateway
@@ -343,7 +361,7 @@ stage_onboard() {
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels onboard gateway verify)
+ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
