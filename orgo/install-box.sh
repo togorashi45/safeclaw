@@ -190,6 +190,57 @@ EOF
 }
 
 # =============================================================================
+stage_backup() {
+  say "STAGE backup: daily brain pg_dump + configs, supervised (cron is absent here)"
+  # The brain lives in Postgres, so a pg_dump is the backup that matters. cron is
+  # absent on orgo boxes, so a tiny supervisord timer is the reboot-safe scheduler.
+  mkdir -p /opt/backups /root/.hermes/profiles/actor/scripts
+  cat >/root/.hermes/profiles/actor/scripts/daily-backup.sh <<'BK'
+#!/usr/bin/env bash
+# Daily backup: brain DATABASE (pg_dump) + brain files + hermes config. Keeps 7 days.
+BACKUP_DIR=/opt/backups
+DATE=$(date +%Y-%m-%d)
+KEEP_DAYS=7
+mkdir -p "$BACKUP_DIR"
+if sudo -u postgres pg_dump -Fc brain > "$BACKUP_DIR/brain-db-$DATE.dump" 2>/var/log/brain-backup.err; then
+  echo "pg_dump ok: $(du -h "$BACKUP_DIR/brain-db-$DATE.dump" | cut -f1)"
+else
+  echo "PG_DUMP FAILED"; rm -f "$BACKUP_DIR/brain-db-$DATE.dump"
+fi
+tar -czf "$BACKUP_DIR/brain-files-$DATE.tar.gz" -C /opt --exclude='brain/.gbrain*' --exclude='brain/*.pglite*' brain 2>/dev/null
+tar -czf "$BACKUP_DIR/hermes-configs-$DATE.tar.gz" -C /root/.hermes config.yaml .env 2>/dev/null
+[ -d /root/.hermes/profiles/actor ] && tar -czf "$BACKUP_DIR/hermes-actor-$DATE.tar.gz" -C /root/.hermes/profiles actor 2>/dev/null
+find "$BACKUP_DIR" -name 'brain-db-*.dump' -mtime +$KEEP_DAYS -delete
+find "$BACKUP_DIR" -name '*.tar.gz' -mtime +$KEEP_DAYS -delete
+BK
+  chmod +x /root/.hermes/profiles/actor/scripts/daily-backup.sh
+  cat >/opt/brain-backup-loop.sh <<'LOOP'
+#!/usr/bin/env bash
+SCRIPT=/root/.hermes/profiles/actor/scripts/daily-backup.sh
+while true; do
+  now=$(date +%s)
+  target=$(date -d 'today 09:10' +%s 2>/dev/null || echo $((now+86400)))
+  [ "$target" -le "$now" ] && target=$(date -d 'tomorrow 09:10' +%s 2>/dev/null || echo $((now+86400)))
+  sleep $(( target - now ))
+  bash "$SCRIPT" >> /var/log/brain-backup.log 2>&1
+done
+LOOP
+  chmod +x /opt/brain-backup-loop.sh
+  cat >/etc/supervisor/conf.d/brain-backup.conf <<'CONF'
+[program:brain-backup]
+command=/opt/brain-backup-loop.sh
+autostart=true
+autorestart=true
+startsecs=5
+stdout_logfile=/var/log/brain-backup.log
+stderr_logfile=/var/log/brain-backup.log
+CONF
+  supervisorctl reread; supervisorctl update
+  bash /root/.hermes/profiles/actor/scripts/daily-backup.sh || true
+  echo "backup: first dump written to /opt/backups; daily timer running under supervisor."
+}
+
+# =============================================================================
 stage_composio_project() {
   say "STAGE composio_project: isolated Composio project + key for '$COMPOSIO_PROJECT'"
   mkdir -p "$BRAIN"
@@ -411,7 +462,7 @@ stage_onboard() {
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
