@@ -47,8 +47,18 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${WHATSAPP_MODE:=bot}"                   # bot = dedicated box number the principal texts; self-chat = link their own
 : "${AGENTMAIL_INBOX:=}"                     # this box's own email address (off-box minted)
 : "${AGENTMAIL_API_KEY:=}"                   # INBOX-SCOPED key (never the org key); mint via orgo/agentmail-provision.sh
+# Portal (the per-box client portal, served natively against this box's Postgres):
+: "${PORTAL_REF:=feat/portal-per-box-template}"  # branch/tag of togorashi45/rereset-portal to install
+: "${PORTAL_SLUG:=${CLIENT_SLUG}}"          # the /c/<slug> + brief clientSlug (e.g. phil-gore)
+: "${PORTAL_ALLOWLIST:=}"                    # the client's own login emails (comma-separated), gates /c
+: "${PORTAL_DOMAIN:=portal-${PORTAL_SLUG}.rereset.ai}"  # public hostname (needs a Cloudflare CNAME to the tunnel)
+: "${PORTAL_PORT:=3008}"
+: "${AUTH_GOOGLE_ID:=}"                      # shared Google OAuth client id (NextAuth)
+: "${AUTH_GOOGLE_SECRET:=}"                  # shared Google OAuth client secret
+: "${PORTAL_INGEST_SECRET:=}"               # shared brief ingest secret; reused by the brief writer
 
 REPO=/opt/safeclaw
+PORTAL=/opt/rereset-portal
 BRAIN=/opt/brain
 PGV=16
 
@@ -492,8 +502,118 @@ stage_onboard() {
   echo "NOTE: start onboarding with: bash $REPO/orgo/onboarding/onboarding-kickoff.sh"
 }
 
+# =============================================================================
+stage_portal() {
+  say "STAGE portal: native per-box client portal (Next.js + this box's Postgres)"
+  if [ -z "${GITHUB_TOKEN:-}" ]; then echo "SKIP: GITHUB_TOKEN needed to clone the portal repo"; return 0; fi
+  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin
+  have node || { echo "SKIP: node not installed (stage_base installs node 20)"; return 0; }
+
+  # 1. source. Clone or fast-forward the requested branch. Token stays in the remote
+  #    (this box's own deploy token) so fleet-updater can pull later.
+  if [ -d "$PORTAL/.git" ]; then
+    ( cd "$PORTAL" && git fetch --depth 1 origin "$PORTAL_REF" && git reset --hard FETCH_HEAD )
+  else
+    git clone --depth 1 -b "$PORTAL_REF" \
+      "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/rereset-portal.git" "$PORTAL"
+  fi
+  [ -f "$PORTAL/package.json" ] || { echo "SKIP: portal clone failed"; return 0; }
+
+  # 2. Postgres: a non-superuser portal role + its own DB on the supervised cluster
+  #    (separate from the brain DB). pg_hba already allows 127.0.0.1 scram.
+  local PPW; PPW="$(gen 16)"
+  sudo -u postgres psql -c "ALTER ROLE portal LOGIN PASSWORD '$PPW'" 2>/dev/null \
+    || sudo -u postgres psql -c "CREATE ROLE portal LOGIN PASSWORD '$PPW'"
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='rereset_portal'" | grep -q 1 \
+    || sudo -u postgres psql -c "CREATE DATABASE rereset_portal OWNER portal"
+  sudo -u postgres psql -d rereset_portal -f "$PORTAL/db/portal-schema.sql" >/dev/null 2>&1 || echo "VERIFY: portal schema apply"
+  sudo -u postgres psql -d rereset_portal -c \
+    "GRANT ALL ON SCHEMA public TO portal; GRANT ALL ON ALL TABLES IN SCHEMA public TO portal; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO portal;" >/dev/null 2>&1
+
+  # 3. env. AUTH_SECRET persists a rebuild; secrets stay on the box, chmod 600.
+  local SEC="${PORTAL_INGEST_SECRET:-$(gen 24)}"
+  if [ ! -f "$PORTAL/.env.local" ] || ! grep -q '^AUTH_SECRET=' "$PORTAL/.env.local"; then
+    cat >"$PORTAL/.env.local" <<EOF
+DATABASE_URL=postgresql://portal:${PPW}@127.0.0.1:5432/rereset_portal
+INGEST_SECRET=${SEC}
+AUTH_SECRET=$(gen 32)
+AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID}
+AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET}
+AUTH_URL=https://${PORTAL_DOMAIN}
+NEXTAUTH_URL=https://${PORTAL_DOMAIN}
+AUTH_TRUST_HOST=true
+PORTAL_ALLOWLIST=${PORTAL_ALLOWLIST}
+PORT=${PORTAL_PORT}
+NODE_ENV=production
+EOF
+    chmod 600 "$PORTAL/.env.local"
+  else
+    # keep the generated db password in sync with the role we just (re)set
+    sed -i "s#^DATABASE_URL=.*#DATABASE_URL=postgresql://portal:${PPW}@127.0.0.1:5432/rereset_portal#" "$PORTAL/.env.local"
+  fi
+
+  # 4. build
+  ( cd "$PORTAL" && npm ci && npm run build ) || { echo "VERIFY: portal build failed"; return 0; }
+
+  # 5. service. Run the next binary DIRECTLY (not via npm) with kill/stopasgroup, else
+  #    npm fails to forward SIGTERM and the old server orphans the port on restart.
+  cat >/etc/supervisor/conf.d/portal-app.conf <<EOF
+[program:portal-app]
+command=$(command -v node) ${PORTAL}/node_modules/next/dist/bin/next start -p ${PORTAL_PORT} -H 127.0.0.1
+directory=${PORTAL}
+autostart=true
+autorestart=true
+startsecs=8
+stopwaitsecs=20
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/var/log/portal-app.log
+stderr_logfile=/var/log/portal-app.log
+environment=PATH="$(dirname "$(command -v node)"):/usr/bin:/bin",NODE_ENV="production"
+EOF
+
+  # 6. hourly Zoom -> brain ingestion (no-ops until the client connects Zoom).
+  cat >/etc/supervisor/conf.d/portal-zoom-ingest.conf <<EOF
+[program:portal-zoom-ingest]
+command=/bin/bash -lc 'cd ${PORTAL}; set -a; . ${PORTAL}/.env.local; set +a; while true; do $(command -v node) ${PORTAL}/scripts/box-zoom/zoom-ingest.mjs; sleep 3600; done'
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/portal-zoom-ingest.log
+stderr_logfile=/var/log/portal-zoom-ingest.log
+EOF
+
+  # 7. point the brief writer at the local native portal (the writer is deployed with
+  #    the box; here we just ensure it targets this portal, not central Convex).
+  if [ -f /etc/supervisor/conf.d/portal-brief.conf ]; then
+    grep -q PORTAL_NATIVE_URL /etc/supervisor/conf.d/portal-brief.conf \
+      || sed -i "/^environment=/ s#\$#,PORTAL_NATIVE_URL=\"http://127.0.0.1:${PORTAL_PORT}\"#" /etc/supervisor/conf.d/portal-brief.conf
+  fi
+
+  # 8. edge: add the portal hostname to the cloudflared tunnel (before the 404 catch).
+  #    The DNS CNAME (PORTAL_DOMAIN -> <tunnel>.cfargotunnel.com) is created off-box.
+  local CFG=/root/.cloudflared/config.yml
+  if [ -f "$CFG" ] && ! grep -q "$PORTAL_DOMAIN" "$CFG"; then
+    python3 - "$CFG" "$PORTAL_DOMAIN" "$PORTAL_PORT" <<'PY'
+import sys
+cfg, host, port = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = open(cfg).read().splitlines(); out = []
+for l in lines:
+    if l.strip() == "- service: http_status:404":
+        out += [f"  - hostname: {host}", f"    service: http://localhost:{port}"]
+    out.append(l)
+open(cfg, "w").write("\n".join(out) + "\n")
+PY
+    pkill -f "cloudflared tunnel" 2>/dev/null || true   # autorestarts with the new ingress
+  fi
+
+  supervisorctl reread; supervisorctl update
+  supervisorctl restart portal-app portal-zoom-ingest 2>/dev/null || true
+  supervisorctl restart portal-brief 2>/dev/null || true
+  echo "portal: built + supervised on :${PORTAL_PORT}; public at https://${PORTAL_DOMAIN} (needs the CF CNAME + Google redirect URI /api/auth/callback/google)."
+}
+
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway portal verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
