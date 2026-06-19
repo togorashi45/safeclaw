@@ -99,6 +99,56 @@ stage_base() {
 }
 
 # =============================================================================
+stage_harden_boot() {
+  say "STAGE harden_boot: survive a reboot (pg socket dir, DNS, single supervisord)"
+  # WHY: /run is a fresh tmpfs every boot, and the orgo base image launches
+  # supervisord from BOTH /opt/init.sh and /opt/startup.sh. Left alone, the next
+  # reboot gives a box (a) two supervisord daemons fighting over the conf.d
+  # programs, (b) postgres FATAL because its socket dir /var/run/postgresql is
+  # gone, and (c) no DNS because /etc/resolv.conf dangles into the wiped tmpfs.
+  # All three bit the live fleet on 2026-06-19. This stage makes them permanent.
+  install -d -o postgres -g postgres -m 2775 /var/run/postgresql 2>/dev/null || true
+  python3 - <<'PY'
+import os
+def bak(p):
+    if os.path.exists(p) and not os.path.exists(p+'.bak-harden'):
+        open(p+'.bak-harden','w').write(open(p).read())
+# Remove the duplicate supervisord launch from /opt/startup.sh (init.sh owns it).
+p='/opt/startup.sh'
+if os.path.exists(p):
+    bak(p); s=open(p).read()
+    ns=s.replace('supervisord -c /etc/supervisor/supervisord.conf &',
+        ': # [harden] redundant supervisord launch removed; /opt/init.sh starts it once')
+    if ns!=s: open(p,'w').write(ns); print('startup.sh: duplicate supervisord launch removed')
+    else: print('startup.sh: clean')
+# Patch /opt/init.sh: guard the launch, create pg socket dir + DNS at every boot.
+p='/opt/init.sh'
+if not os.path.exists(p):
+    print('init.sh: not found (non-orgo base?) — skipping'); raise SystemExit
+bak(p); s=open(p).read(); changed=False
+old='if command -v supervisord >/dev/null 2>&1; then'
+new='if command -v supervisord >/dev/null 2>&1 && ! pgrep -f "supervisord -c /etc/supervisor/supervisord.conf" >/dev/null 2>&1; then'
+if old in s and '! pgrep -f "supervisord' not in s:
+    s=s.replace(old,new,1); changed=True; print('init.sh: supervisord launch guarded')
+marker=new if new in s else old
+add=''
+if 'var/run/postgresql' not in s:
+    add+=('# [harden] /run is fresh tmpfs each boot; postgres needs its socket dir.\n'
+          'install -d -o postgres -g postgres -m 2775 /var/run/postgresql 2>/dev/null\n\n')
+if 'nameserver 172.16.0.1' not in s:
+    add+=('# [harden] resolv.conf dangles into tmpfs with no systemd-resolved present.\n'
+          'if [ ! -s /etc/resolv.conf ]; then\n'
+          '  rm -f /etc/resolv.conf\n'
+          '  printf "nameserver 172.16.0.1\\nnameserver 1.1.1.1\\noptions edns0\\n" > /etc/resolv.conf\n'
+          'fi\n\n')
+if add and marker in s:
+    i=s.find(marker); s=s[:i]+add+s[i:]; changed=True; print('init.sh: pg-dir + DNS boot fixes added')
+if changed: open(p,'w').write(s)
+else: print('init.sh: already hardened')
+PY
+}
+
+# =============================================================================
 stage_brain_db() {
   say "STAGE brain_db: supervised Postgres + pgvector"
   mkdir -p "$BRAIN/repo"
@@ -361,7 +411,7 @@ stage_onboard() {
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base brain_db composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
+ALL=(base harden_boot brain_db composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
