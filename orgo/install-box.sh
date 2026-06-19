@@ -141,6 +141,15 @@ if 'nameserver 172.16.0.1' not in s:
           '  rm -f /etc/resolv.conf\n'
           '  printf "nameserver 172.16.0.1\\nnameserver 1.1.1.1\\noptions edns0\\n" > /etc/resolv.conf\n'
           'fi\n\n')
+if 'api.telegram.org' not in s:
+    # hermes telegram SEND path resolves api.telegram.org via glibc; some boxes
+    # return AAAA/IPv6-first with dead IPv6 egress, which hangs outbound sendMessage
+    # (long-poll RECEIVE still works via hermes own auto-discovered fallback IPs, so
+    # the bot looks connected but never replies). Bit elise live 2026-06-19. Force
+    # IPv4 for the send path: pin api.telegram.org + prefer IPv4 in gai.conf.
+    add+=('# [harden] telegram send path: force IPv4 (box can resolve IPv6-first with dead v6).\n'
+          'grep -q "api.telegram.org" /etc/hosts || echo "149.154.167.220 api.telegram.org" >> /etc/hosts\n'
+          'grep -q "::ffff:0:0/96" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf\n\n')
 if add and marker in s:
     i=s.find(marker); s=s[:i]+add+s[i:]; changed=True; print('init.sh: pg-dir + DNS boot fixes added')
 if changed: open(p,'w').write(s)
@@ -402,6 +411,28 @@ EOF
     echo "NOTE: bridge not present until Hermes is installed (stage_runtime)."
   fi
   [ -n "$COMPOSIO_API_KEY" ] && echo "Composio key present; wire gmail/calendar via Console /api/gmail/wire after gateway is up." || true
+
+  # Telegram: seed the bot token + numeric allowlist so the gateway actually enables
+  # the platform. Without a token in the loaded env the gateway boots "No messaging
+  # platforms enabled" and silently ignores every message (bit the fleet 2026-06-19).
+  # Canonical home per the golden docs is the ACTOR profile .env (token lives only with
+  # the actor). We seed BOTH the default and actor profile .env because install-box.sh
+  # starts the gateway on the default profile, while a box migrated to
+  # `hermes gateway run --profile actor` (per GOLDEN-TEMPLATE.md) reads the actor copy.
+  # Only one gateway runs per box, so there is no second getUpdates poller either way.
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+    for env in /root/.hermes/.env /root/.hermes/profiles/actor/.env; do
+      mkdir -p "$(dirname "$env")"; touch "$env"
+      grep -q '^TELEGRAM_BOT_TOKEN=' "$env" || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" >> "$env"
+      if [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
+        grep -q '^TELEGRAM_ALLOWED_USERS=' "$env" || echo "TELEGRAM_ALLOWED_USERS=$TELEGRAM_ALLOWED_USERS" >> "$env"
+      fi
+      chmod 600 "$env" 2>/dev/null || true
+    done
+    echo "Telegram token seeded into default + actor profile .env (allowlist: ${TELEGRAM_ALLOWED_USERS:-<UNSET - bot will deny everyone!>})."
+  else
+    echo "NOTE: TELEGRAM_BOT_TOKEN not set; skipping Telegram seed (fill it in client.env)."
+  fi
 }
 
 # =============================================================================
