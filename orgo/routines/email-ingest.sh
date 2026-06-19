@@ -14,7 +14,7 @@ MAXTURNS="${2:-60}"
 
 hermes chat -Q --max-turns "$MAXTURNS" -q 'You are the scheduled email-ingestion routine. Work silently and do not ask questions.
 
-CRITICAL - tool availability check FIRST: use whatever Gmail MCP tools are present in your tool list for all email access (the server may be named gmail, gmail_reader, gmail_elise, or similar - any of them is fine). If NO Gmail MCP tool is in your tool list, do NOT improvise with CLI tools and do NOT report zero results - immediately stop and output exactly one line: INGEST ERROR: gmail MCP tools unavailable. Likewise if the gbrain tools are missing, output: INGEST ERROR: gbrain MCP tools unavailable.
+CRITICAL - tool availability check FIRST: your Gmail tools appear in your tool list with PREFIXED names - look for ANY tool whose name CONTAINS the substring GMAIL or FETCH_EMAILS (for example mcp_gmail_elise_GMAIL_FETCH_EMAILS, mcp_gmail_GMAIL_FETCH_EMAILS, or plain GMAIL_FETCH_EMAILS). Match by SUBSTRING, never by exact name - the server prefix varies per box. If at least one tool name contains GMAIL, gmail IS available, use it and proceed. Only if NO tool name anywhere contains GMAIL do you stop and output exactly one line: INGEST ERROR: gmail MCP tools unavailable. Your brain tools are likewise prefixed (for example mcp_gbrain_put_page, mcp_gbrain_get_page); if no tool name contains put_page, output: INGEST ERROR: gbrain MCP tools unavailable. Do NOT improvise with CLI tools and do NOT report zero results when the tools are simply prefixed.
 
 IMPORTANT - keep tool outputs SMALL. Never fetch full email bodies in a list call: list with snippets/headers only, and fetch the full body of ONE email at a time, only for emails that pass the filter.
 
