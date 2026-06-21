@@ -481,7 +481,7 @@ stage_cron() {
   mkdir -p "$SD" "$BS"
 
   # 1. shell routines -> default scripts dir (cron resolves --script relative to $HERMES_HOME/scripts)
-  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh; do
+  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh gbrain-dream.sh; do
     [ -f "$R/$s" ] && install -m 755 "$R/$s" "$SD/$s"
   done
   # 2. deterministic python collectors -> /opt/brain/scripts (what calendar-sync/ghl-sync call)
@@ -504,9 +504,15 @@ stage_cron() {
     hermes cron create "0 * * * *" --name ghl-sync --script ghl-sync.sh --no-agent --deliver local 2>&1 | tail -1 \
       || echo "VERIFY: hermes cron create ghl-sync"
   fi
+  # gbrain-dream: nightly brain compaction. Needs the OpenRouter key (same one gbrain
+  # embeds/dreams with); runs against Postgres so no brain-server stop is needed.
+  if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+    hermes cron create "0 9 * * *" --name gbrain-dream --script gbrain-dream.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create gbrain-dream"
+  else
+    echo "NOTE: OPENROUTER_API_KEY unset; skipping gbrain-dream (dream needs it)."
+  fi
   echo "cron jobs registered (default profile):"; hermes cron list 2>/dev/null | grep -E "Name:|Next run:" || true
-  # NOTE: gbrain-dream (nightly brain compaction) is not yet a repo routine; add it to
-  # orgo/routines and this stage when it is reconciled to the default profile.
 }
 
 # =============================================================================
@@ -630,11 +636,24 @@ stdout_logfile=/var/log/portal-zoom-ingest.log
 stderr_logfile=/var/log/portal-zoom-ingest.log
 EOF
 
-  # 7. point the brief writer at the local native portal (the writer is deployed with
-  #    the box; here we just ensure it targets this portal, not central Convex).
+  # 7. brief writer. The canonical portal_brief.py (native ingest + rich emails/
+  #    events + the Composio 413 metadata-only fix) ships in the portal repo. Deploy
+  #    it and supervise it pointed at THIS box's portal, so a fresh box gets a brief.
+  install -D -m 644 "$PORTAL/scripts/box-brief/portal_brief.py" /root/.hermes/scripts/portal_brief.py
   if [ -f /etc/supervisor/conf.d/portal-brief.conf ]; then
+    # an existing writer (older Convex-era box): just retarget it at the local portal
     grep -q PORTAL_NATIVE_URL /etc/supervisor/conf.d/portal-brief.conf \
       || sed -i "/^environment=/ s#\$#,PORTAL_NATIVE_URL=\"http://127.0.0.1:${PORTAL_PORT}\"#" /etc/supervisor/conf.d/portal-brief.conf
+  else
+    cat >/etc/supervisor/conf.d/portal-brief.conf <<EOF
+[program:portal-brief]
+command=/usr/bin/python3 /root/.hermes/scripts/portal_brief.py
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/portal-brief.log
+stderr_logfile=/var/log/portal-brief.log
+environment=PORTAL_SECRET="${SEC}",CLIENT_SLUG="${PORTAL_SLUG}",PORTAL_NATIVE_URL="http://127.0.0.1:${PORTAL_PORT}"
+EOF
   fi
 
   # 8. edge: add the portal hostname to the cloudflared tunnel (before the 404 catch).
