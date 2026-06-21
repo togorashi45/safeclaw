@@ -1,5 +1,13 @@
 # SafeClaw on orgo.ai — Canonical Client Deployment Template
 
+> ⚠️ **SUPERSEDED 2026-06-19, legacy manual template.** The canonical installer is
+> now `orgo/install-box.sh` (spec in `GOLDEN-TEMPLATE.md`). It builds the box on a
+> **single default Hermes profile** with the supervised Postgres brain and deploys +
+> schedules the cron routines on that profile (`stage_cron`). The two-profile
+> **actor/reader** trust split described throughout this document is RETIRED: do not
+> create actor/reader profiles. Keep this only as a deep reference for the manual
+> steps and gotchas; where it conflicts with `install-box.sh`, the installer wins.
+>
 > **What this is.** THE single source of truth for deploying the full SafeClaw
 > stack (**Hermes reader/actor + GBrain + nightly dreaming + SafeClaw Console +
 > Slack/Telegram/Gmail trust-split integrations**) onto a fresh **orgo.ai**

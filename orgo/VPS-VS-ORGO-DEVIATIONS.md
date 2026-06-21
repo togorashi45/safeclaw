@@ -1,5 +1,12 @@
 # VPS SafeClaw vs orgo-native SafeClaw — Deviations, Trade-offs, and Migration Plan
 
+> ⚠️ **UPDATE 2026-06-19: the two-profile model was retired.** This document weighs a
+> reader/actor Hermes profile split as the orgo trust boundary. That decision was
+> reversed: boxes now run a **single default Hermes profile**. The Gmail read vs
+> send boundary is handled by the Composio MCP tool allowlist and SOUL rules, not by
+> a second profile. Read the profile-split sections below as historical rationale;
+> the current architecture is in `GOLDEN-TEMPLATE.md` and `install-box.sh`.
+>
 > **What this is.** A strategic engineering record answering the owner's question:
 > *"How have we deviated from the original SafeClaw we install on the VPS? We've
 > greatly simplified it. If I make the orgo installation my MAIN deployment and use

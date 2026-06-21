@@ -28,7 +28,7 @@ fire() { # $1 = day label, $2 = instruction
   local day="$1" instr="$2"
   if grep -q "^done_${day}=" "$STATE" 2>/dev/null; then return 0; fi
   # VERIFY: agent-driven invocation. Make the agent run this instruction and message the principal.
-  if hermes agent run --profile actor --prompt "ONBOARDING TEACH FOLLOWUP. $instr Use TEACH-PLAYBOOK.md ($PLAYBOOK)." 2>/dev/null; then
+  if hermes agent run --prompt "ONBOARDING TEACH FOLLOWUP. $instr Use TEACH-PLAYBOOK.md ($PLAYBOOK)." 2>/dev/null; then
     :
   else
     # Fallback: drop a task page the agent will pick up next turn.
@@ -41,7 +41,7 @@ fire() { # $1 = day label, $2 = instruction
 case "${1:-run}" in
   register)
     # VERIFY: cron registration flags match the routines/ pattern.
-    HERMES_HOME=/root/.hermes/profiles/actor hermes cron create "0 23 * * *" \
+    hermes cron create "0 23 * * *" \
       --name teach-followup --script teach-followup.sh --no-agent --deliver local \
       || echo "VERIFY: hermes cron create flags for teach-followup"
     echo "registered daily teach-followup cron (23:00)"

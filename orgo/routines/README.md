@@ -18,6 +18,7 @@ the manual steps below for ad-hoc deploys or backfills.
 | `calendar-collect.py` | called by `calendar-sync.sh` | n/a (direct Composio) | Deterministic Google Calendar collector via Composio tool-execute; writes gbrain daily files at `daily/calendar/{YYYY}/{date}.md`. Arg is days-back. Reads `COMPOSIO_API_KEY` from `/opt/brain/.env` or `/root/.hermes/.env`. |
 | `calendar-sync.sh` | `30 5 * * *` (daily 05:30) | n/a (direct Composio) | Recurring wrapper: runs `calendar-collect.py <days>` (default 45) then `gbrain import` + `embed --stale`. Idempotent. |
 | `ghl-collect.py` / `ghl-sync.sh` | `0 * * * *` (opt-in) | n/a (direct Composio/GHL) | GoHighLevel -> gbrain working-set sync (deals, pipeline, unreplied, appointments). Registered only when `ENABLE_GHL_SYNC=1`. |
+| `gbrain-dream.sh` | `0 9 * * *` (daily 09:00) | n/a (direct gbrain CLI) | Nightly brain compaction / reflection / link-building (`gbrain dream`). Logs to `/opt/brain/dream.log`. Runs against the supervised Postgres brain, so there is no PGLite writer lock to release and no brain server to stop. Registered when `OPENROUTER_API_KEY` is set. |
 
 ## How the installer wires it (stage_cron)
 
@@ -26,7 +27,8 @@ the manual steps below for ad-hoc deploys or backfills.
 2. copies the Python collectors to `/opt/brain/scripts/`
 3. sets `cron.script_timeout_seconds: 1800` on the default config (see gotcha below)
 4. registers the jobs on the default profile: email-ingest + calendar-sync when
-   `COMPOSIO_API_KEY` is set, ghl-sync when `ENABLE_GHL_SYNC=1`.
+   `COMPOSIO_API_KEY` is set, ghl-sync when `ENABLE_GHL_SYNC=1`, gbrain-dream when
+   `OPENROUTER_API_KEY` is set.
 
 ## Deploying a routine manually (ad-hoc)
 

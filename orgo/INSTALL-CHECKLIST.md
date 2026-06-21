@@ -1,5 +1,14 @@
 # SafeClaw on orgo.ai - Install Checklist (one page)
 
+> ⚠️ **LEGACY MANUAL FLOW (superseded 2026-06-19).** This checklist describes the
+> old manual install with a two-profile **actor/reader** trust split and the
+> PGLite/tmux runtime. The canonical path is now `orgo/install-box.sh` (see
+> `GOLDEN-TEMPLATE.md`): it builds the box on a **single default Hermes profile**
+> with the supervised Postgres brain, and deploys + schedules the cron routines on
+> that default profile (`stage_cron`). Do NOT create actor/reader profiles on new
+> boxes. Keep this page only as historical reference; the Step 3 / Step 6 / Step 8
+> "profile" sections below no longer reflect how boxes are built.
+
 > Printable checkbox mirror of `ORGO-CLIENT-TEMPLATE.md`. Tick top-to-bottom.
 > Worked example: `<CLIENT>=mark` in Jake McKinney's paid workspace
 > (`9898964f-f0f8-4d05-b08c-20b89a2b401d`) - first real install 2026-06-01,

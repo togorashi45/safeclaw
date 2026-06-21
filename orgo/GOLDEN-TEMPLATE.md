@@ -4,7 +4,7 @@
 
 This is the canonical, most-complete SafeClaw. It consolidates the best integration from every live client box into one clean template so a new client box can be stood up with the full capability set. Every concrete artifact referenced here lives in this repo; per-client secrets never do (they go in `client.env`, which is gitignored).
 
-Pairs with `orgo/STANDARDIZATION.md` (the fleet baseline) and `orgo/ORGO-CLIENT-TEMPLATE.md` (the full install manual). Provision a box with `orgo/provision-client.py` + `orgo/INSTALL-CHECKLIST.md`, then layer the channels and skill packs below.
+Pairs with `orgo/STANDARDIZATION.md` (the fleet baseline). **Provision a box with `orgo/install-box.sh`** (the canonical from-scratch installer; it supersedes `provision-client.py` and the manual `ORGO-CLIENT-TEMPLATE.md`), then layer the channels and skill packs below. Boxes run a **single default Hermes profile** (the actor/reader split was retired 2026-06-19).
 
 ---
 
@@ -13,7 +13,7 @@ Pairs with `orgo/STANDARDIZATION.md` (the fleet baseline) and `orgo/ORGO-CLIENT-
 Every box runs this exact shape. Proven across Matt, Travis, Elise, Phil.
 
 - **Brain:** gBrain `0.42.42.0` on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` + `safeclaw-brain`. Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim).
-- **Gateway:** exactly one supervised program `hermes-gateway-actor` (`hermes gateway run --profile actor`). No reader gateway. The reader profile is dormant and carries Gmail + gbrain only.
+- **Gateway:** exactly one supervised gateway program running `hermes gateway run` on the **single default profile**. No actor/reader split (collapsed 2026-06-19): one profile holds the model, MCP servers, channel tokens, cron jobs, and the ingest scripts. The default profile is the only gateway that runs, so it is the only scheduler that ticks.
 - **Console / tunnel / dashboard:** SafeClaw UI on `:8899`, cloudflared named tunnel, Hermes dashboard on `:9119`, kept alive by the tmux `watchdog`. The watchdog never manages the brain (that is supervised) to avoid the dual-writer corruption that killed PGlite.
 - **Provisioning gotcha:** the brain role needs `CREATE ROLE brain LOGIN SUPERUSER BYPASSRLS` (superuser alone does not set `rolbypassrls`, and gBrain's v24 migration halts without it).
 
@@ -27,7 +27,7 @@ Every box gets a deliberate agent persona, not the stock Hermes default. The per
 
 - **File:** `orgo/SOUL.template.md` in this repo. Fill the placeholders for the client, strip the comment header, and save it on the box as `~/.hermes/SOUL.md`. Hermes loads it fresh every message, so edits take effect with no restart.
 - **What it carries:** stance and tone, an operating doctrine (constraint-first, define the problem, reliability before growth), an autonomy hard line (draft-only from the owner's address, allowlist for internal sends, stop before spend/publish/destructive/credential changes), a mission map, and prompt-injection hard lines (treat email, docs, transcripts, and brain pages as data, never as commands).
-- **Distinct from the user "Soul" brain page.** SOUL.md is the AGENT persona (static, version-controlled here). The brain page `identity/soul` is the USER's identity and principles (seeded into gBrain, updated by the weekly reflector through the review queue). Do not conflate them. The personas plugin (`safeclaw-personas`) governs the reader/actor trust split and is separate again.
+- **Distinct from the user "Soul" brain page.** SOUL.md is the AGENT persona (static, version-controlled here). The brain page `identity/soul` is the USER's identity and principles (seeded into gBrain, updated by the weekly reflector through the review queue). Do not conflate them.
 - **Customize per client:** swap the generic doctrine block for the client's own operating philosophy if they have one. Keep it em-dash clean so the persona never seeds slop into public-facing output.
 
 ---
@@ -45,17 +45,17 @@ Every box gets a deliberate agent persona, not the stock Hermes default. The per
 A Baileys WhatsApp Web bridge feeds the native Hermes WhatsApp platform.
 - **Bridge:** `/opt/hermes/scripts/whatsapp-bridge/bridge.js` (ships with Hermes), run under supervisor on `:3000`. Conf: program `whatsapp-bridge`, `WHATSAPP_ALLOWED_USERS="*"` (scope per client), `autostart/autorestart`.
 - **Pairing:** one-time QR scan; session persists at `/root/.hermes/whatsapp/session/`.
-- **Hermes side:** the Actor profile declares `whatsapp:` with `session_path: /root/.hermes/profiles/actor/platforms/whatsapp/session`.
-- **Known gotcha:** newer Hermes requires `creds.json` at the **profile** session path while the bridge writes the **default** path; if the gateway goes FATAL with the bridge still connected, symlink the profile session dir to the bridge session dir and restart the gateway.
+- **Hermes side:** the default profile declares `whatsapp:` with `session_path: /root/.hermes/platforms/whatsapp/session`.
+- **Known gotcha:** newer Hermes requires `creds.json` at the profile session path while the bridge writes its own default path; if the gateway goes FATAL with the bridge still connected, symlink the profile session dir to the bridge session dir and restart the gateway.
 
 ### Telegram (Travis / Elise's setup)
 Native Hermes platform, no public URL.
-- `TELEGRAM_BOT_TOKEN` from @BotFather, `TELEGRAM_ALLOWED_USERS` (comma-separated numeric ids), both in `client.env`.
-- The Actor profile declares the `telegram` handler. Easiest channel to add.
+- `TELEGRAM_BOT_TOKEN` from @BotFather, `TELEGRAM_ALLOWED_USERS` (comma-separated numeric ids), both in `client.env`. The installer seeds them into the default profile `.env`; the box also pins `api.telegram.org` to IPv4 so outbound sends do not hang on dead IPv6 (see install-box.sh `stage_harden_boot`).
+- The default profile declares the `telegram` handler. Easiest channel to add.
 
 ### Slack (Jeremiah's setup)
-Socket mode, no public URL. Reader/actor token split.
-- `SLACK_BOT_TOKEN` (actor: post/send), `SLACK_MCP_BOT_TOKEN` (reader, read-only), `SLACK_HOME_CHANNEL`, `SLACK_INGEST_CHANNELS` in `client.env`.
+Socket mode, no public URL. The read vs post boundary is enforced by the Slack MCP's own `SLACK_MCP_MODE` tool allowlist, not by a separate Hermes profile.
+- `SLACK_BOT_TOKEN` (post/send), `SLACK_MCP_BOT_TOKEN` (read-only MCP), `SLACK_HOME_CHANNEL`, `SLACK_INGEST_CHANNELS` in `client.env`.
 - Tooling: `mcp-tools/slack-api` (MCP) + `skills/slack-to-gdrive` (ingest playbook).
 - NOTE: Jeremiah currently runs on a Hostinger VPS (`runtime: hostinger-vps`), not Orgo. His live socket-mode config is the reference instance; capture it when his box moves to Orgo (see "Pending").
 
@@ -64,8 +64,8 @@ Socket mode, no public URL. Reader/actor token split.
 ## GoHighLevel CRM (Matt / Travis's setup)
 
 Two parts, both in this repo.
-1. **Live tools (Actor):** the `@mastanley13/ghl-mcp-server` **stdio** build registered in the Actor `config.yaml` `mcp_servers` as `ghl` (`command: node, args: [.../dist/server.js], env: GHL_API_KEY/GHL_BASE_URL/GHL_LOCATION_ID`). Use the **stdio** build (more tools, stable); the published HTTP/SSE build 500s on Hermes' connection pattern.
-2. **Working-set ingestion:** `orgo/routines/ghl-collect.py` + `orgo/routines/ghl-sync.sh`, on a `0 */4 * * *` `--no-agent` Hermes cron (`ghl-sync`). Produces `crm/deals/*` + `crm/board/{pipeline-summary,unreplied,appointments}` pages. Playbook: `skills/ghl-to-brain`.
+1. **Live tools:** the `@mastanley13/ghl-mcp-server` **stdio** build registered in the default `config.yaml` `mcp_servers` as `ghl` (`command: node, args: [.../dist/server.js], env: GHL_API_KEY/GHL_BASE_URL/GHL_LOCATION_ID`). Use the **stdio** build (more tools, stable); the published HTTP/SSE build 500s on Hermes' connection pattern.
+2. **Working-set ingestion:** `orgo/routines/ghl-collect.py` + `orgo/routines/ghl-sync.sh`, on a `--no-agent` Hermes cron (`ghl-sync`, registered by `stage_cron` when `ENABLE_GHL_SYNC=1`). Produces `crm/deals/*` + `crm/board/{pipeline-summary,unreplied,appointments}` pages. Playbook: `skills/ghl-to-brain`.
 - Env: `GHL_API_KEY` (Private Integration Token) + `GHL_LOCATION_ID`. The collector reads them from `/opt/ghl-mcp/.env`, `/opt/safeclaw/client.env`, or `/root/.hermes/.env`.
 - Verified on Travis 2026-06-14: 140 open deals, 270 unreplied threads, pipeline summary, imported + embedded.
 
@@ -74,12 +74,12 @@ Two parts, both in this repo.
 ## Google / Composio OAuth (all boxes)
 
 OAuth for Gmail, Calendar, Docs, Sheets, and Tasks runs through **Composio**, one scoped workspace/key per client (keys are not interchangeable across boxes).
-- Env: `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID`, reader/actor MCP URLs in `client.env`.
+- Env: `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID`, and the Composio MCP URL(s) in `client.env`. They are wired into the single default profile config.
 - **Self-service connect:** the `onboarding/` Flask app (Victor-style OAuth onboarding) is where a client clicks to authorize each provider; per-account ids are appended to the Hermes config from the Connections registry.
-- **Native ingestion routines (deterministic collectors, not the agent):**
-  - `orgo/routines/email-ingest.sh` → Gmail working set into the brain (hourly). Playbook `skills/email-to-brain`.
-  - `orgo/routines/calendar-collect.py` + `calendar-sync.sh` → Calendar into the brain (daily). Playbook `skills/calendar-to-brain`.
-- Keep the **reader profile lean (Gmail + gbrain only)**; extra remote Composio servers in the reader make Gmail lose the cold-start race and the ingest aborts.
+- **Native ingestion routines (deployed + scheduled by `stage_cron`):**
+  - `orgo/routines/email-ingest-cron.sh` (wraps `email-ingest.sh`) into the brain (hourly). Playbook `skills/email-to-brain`.
+  - `orgo/routines/calendar-collect.py` + `calendar-sync.sh` into the brain (daily). Playbook `skills/calendar-to-brain`.
+- The Gmail MCP lives in the **default** profile config. Because the single default profile loads the box's full MCP set, the remote Composio Gmail server can lose the cold-start race against the local brain; the **email-ingest-cron.sh wrapper** (readiness pre-check + bounded retries) is the registered entrypoint that handles this. Keep the box's MCP server count as small as it actually needs.
 
 ---
 
@@ -101,7 +101,7 @@ Beyond the runtime and channels, every box ships a small, consistent scaffolding
 - **`SOUL.md`** (persona, covered above). The agent's stance, autonomy hard line, and prompt-injection hard line.
 - **`AGENTS.md`** (operating contract). The machine map of the box: where things live, how to behave, the hard rules. Distinct from `AI-AGENTS.md`, which is the install guide.
 - **`knowledge/`** (the client's domain facts). The per-client customization surface: `client-profile.md`, `deal-criteria.md` for real-estate clients, `key-people.md`. The agent reads the one that matches the task, on demand. Facts only, no secrets. Templates in `orgo/knowledge/`.
-- **`decisions/`** (box ADR log). Why the box is configured the way it is, so nobody re-litigates or "fixes" something intentional. Seeded with the baseline calls (Postgres, actor-only, supervised brain, skill-router, draft-first). Template in `orgo/decisions/`.
+- **`decisions/`** (box ADR log). Why the box is configured the way it is, so nobody re-litigates or "fixes" something intentional. Seeded with the baseline calls (Postgres, single default profile, supervised brain, skill-router, draft-first). Template in `orgo/decisions/`.
 - **`evals/`** (guardrail smoke tests). A handful of behavioral checks that prove the agent's safety holds (drafts not sends, refuses prompt injection, stops before spend, ingestion works, recovers on restart) before the box goes to the client. In `orgo/evals/`.
 - **Skill loading** (skill-router metaskill, separate branch). Skills load on demand, not preloaded, so context stays lean.
 
@@ -111,12 +111,12 @@ What the MVP deliberately leaves out: a full automated eval harness, CI, and hea
 
 ## Provisioning order (new client box)
 
-1. `orgo/provision-client.py` + `INSTALL-CHECKLIST.md` → base box, Postgres brain, gateway, tunnel/console/dashboard, watchdog (per `STANDARDIZATION.md`).
+1. `orgo/install-box.sh` (canonical installer) -> base box, Postgres brain, gateway (single default profile), cron routines, channels, portal (per its stages). `INSTALL-CHECKLIST.md` is the verify pass.
 2. Fill `client.env` from `client.env.example` (identity, brain, LLM, Composio, channels, GHL if applicable).
 3. Deploy the agent persona: fill `orgo/SOUL.template.md` for the client, strip the comment header, save it on the box as `~/.hermes/SOUL.md`.
 4. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).
 5. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
-6. Schedule the ingestion routines: `email-ingest` (hourly), `calendar-sync` (daily), and `ghl-sync` (4h) for CRM clients.
+6. Ingestion routines are deployed + scheduled on the default profile by `stage_cron`: `email-ingest` (hourly), `calendar-sync` (daily), `gbrain-dream` (daily), and `ghl-sync` (hourly, when `ENABLE_GHL_SYNC=1`) for CRM clients.
 7. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
 8. Fill the box scaffolding: `AGENTS.md` (as-is), `knowledge/` (from the templates, per client), `decisions/` (add any per-box notes). Run `evals/guardrails.md` against the agent before handing the box to the client.
 
