@@ -12,24 +12,24 @@
 #   (2) bounded retries (auto-reconnect with backoff) to beat the agent-side
 #       cold-start race when gmail loses the registration race vs the brain.
 # Fast-failing aborts keep the whole thing well under the hermes cron
-# script_timeout (1800s in the actor config).
+# script_timeout (1800s in the default config).
 #
 #   usage: email-ingest-cron.sh [WINDOW] [MAXTURNS] [ATTEMPTS]
 #     WINDOW    gmail newer_than window per run   (default 3h, overlaps hourly)
 #     MAXTURNS  agent turn cap                    (default 60)
 #     ATTEMPTS  cold-start retry attempts         (default 4)
 set +e
-export HERMES_HOME=/root/.hermes/profiles/actor
+export HERMES_HOME=/root/.hermes
 export PATH=/usr/local/bin:/root/.bun/bin:/tmp/node-v20.18.1-linux-x64/bin:$PATH
 
 WINDOW="${1:-3h}"; MAXTURNS="${2:-60}"; ATTEMPTS="${3:-4}"
-INGEST=/root/.hermes/profiles/actor/scripts/email-ingest.sh
-READER=/root/.hermes/profiles/reader/config.yaml
+INGEST=/root/.hermes/scripts/email-ingest.sh
+CFG=/root/.hermes/config.yaml
 
 # --- pre-flight: wait for the Composio gmail MCP to answer tools/list ---
-# Reads the gmail server url + x-api-key straight from the reader profile so it
-# stays generic across boxes (server may be named gmail, gmail_<name>, etc).
-read -r URL KEY < <(python3 - "$READER" <<'PY'
+# Reads the gmail server url + x-api-key straight from the default profile config so
+# it stays generic across boxes (server may be named gmail, gmail_<name>, etc).
+read -r URL KEY < <(python3 - "$CFG" <<'PY'
 import sys, yaml
 try:
     c = yaml.safe_load(open(sys.argv[1])) or {}

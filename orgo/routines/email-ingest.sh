@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # SafeClaw email-ingestion routine.
-# Runs the READER profile (read-only Gmail + gbrain). Generic across boxes:
-# it uses whatever Gmail MCP tools are present in the tool list, so it does not
-# care whether the server is named gmail, gmail_reader, gmail_elise, etc.
+# Runs the DEFAULT profile (single-profile architecture; the default gateway is the
+# only one that runs). Generic across boxes: it uses whatever Gmail MCP tools are
+# present in the tool list, so it does not care whether the server is named gmail,
+# gmail_reader, gmail_elise, etc. The default profile loads the box's full MCP set,
+# so prefer the email-ingest-cron.sh wrapper (cold-start pre-check + retries) for
+# the scheduled run rather than calling this script bare.
 #   usage: email-ingest.sh [WINDOW] [MAXTURNS]
 #   WINDOW   gmail newer_than window for this run (default 2h incremental; pass 14d to backfill)
 #   MAXTURNS agent turn cap (default 60; raise for a backfill)
-export HERMES_HOME=/root/.hermes/profiles/reader
+export HERMES_HOME=/root/.hermes
 export PATH=/usr/local/bin:/tmp/node-v20.18.1-linux-x64/bin:$PATH
 
 WINDOW="${1:-2h}"

@@ -3,7 +3,7 @@
 # abort with INGEST ERROR before tools finish registering. Re-run until a clean
 # INGEST RESULT lands (or attempts exhaust).
 #   usage: ingest-retry.sh [WINDOW] [MAXTURNS] [ATTEMPTS]
-S=/root/.hermes/profiles/actor/scripts/email-ingest.sh
+S=/root/.hermes/scripts/email-ingest.sh
 WINDOW="${1:-30d}"; MAXTURNS="${2:-200}"; ATTEMPTS="${3:-4}"
 for try in $(seq 1 "$ATTEMPTS"); do
   echo "=== attempt $try ($WINDOW, $MAXTURNS turns) ==="

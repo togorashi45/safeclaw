@@ -47,6 +47,9 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${WHATSAPP_MODE:=bot}"                   # bot = dedicated box number the principal texts; self-chat = link their own
 : "${AGENTMAIL_INBOX:=}"                     # this box's own email address (off-box minted)
 : "${AGENTMAIL_API_KEY:=}"                   # INBOX-SCOPED key (never the org key); mint via orgo/agentmail-provision.sh
+# Recurring routines (stage_cron). email-ingest + calendar-sync auto-enable when
+# COMPOSIO_API_KEY is set; GHL sync is opt-in (clients on GoHighLevel only):
+: "${ENABLE_GHL_SYNC:=}"                     # set to 1 to schedule the hourly GHL -> gbrain sync
 # Portal (the per-box client portal, served natively against this box's Postgres):
 : "${PORTAL_REF:=feat/portal-per-box-template}"  # branch/tag of togorashi45/rereset-portal to install
 : "${PORTAL_SLUG:=${CLIENT_SLUG}}"          # the /c/<slug> + brief clientSlug (e.g. phil-gore)
@@ -366,6 +369,10 @@ stage_hermes_config() {
   hermes config set model.name "$HERMES_MODEL" 2>/dev/null || true
   hermes config set agent.max_turns 25 2>/dev/null || true
   hermes config set agent.auxiliary.compression.enabled true 2>/dev/null || true
+  # Cron --no-agent scripts (email-ingest etc.) are killed at 120s by default; a run
+  # that actually ingests takes minutes. Raise the cron script timeout to 1800s on
+  # the default profile so real ingest runs are not killed (learned live on the fleet).
+  hermes config set cron.script_timeout_seconds 1800 2>/dev/null || true
   [ -n "$OLLAMA_API_KEY" ] && hermes auth add ollama-cloud --type api-key --key "$OLLAMA_API_KEY" 2>/dev/null || true
   # gbrain wired as a URL MCP (not stdio) once the HTTP/serve endpoint is up. VERIFY endpoint per gbrain version.
 }
@@ -420,7 +427,7 @@ EOF
   else
     echo "NOTE: bridge not present until Hermes is installed (stage_runtime)."
   fi
-  [ -n "$COMPOSIO_API_KEY" ] && echo "Composio key present; wire gmail/calendar via Console /api/gmail/wire after gateway is up." || true
+  [ -n "$COMPOSIO_API_KEY" ] && echo "Composio key present; wire gmail/calendar into the DEFAULT profile config (mcp_servers.gmail_<slug>) via Console /api/gmail/wire after gateway is up. email-ingest reads the gmail MCP from the default config." || true
 
   # Telegram: seed the bot token + numeric allowlist so the gateway actually enables
   # the platform. Without a token in the loaded env the gateway boots "No messaging
@@ -459,6 +466,47 @@ stage_email() {
     --env AGENTMAIL_API_KEY="$AGENTMAIL_API_KEY" AGENTMAIL_INBOX="$AGENTMAIL_INBOX" \
     --command /opt/hermes/venv/bin/python3 --args "$SRV" 2>&1 | tail -3 \
     || echo "VERIFY: hermes mcp add agentmail"
+}
+
+# =============================================================================
+stage_cron() {
+  say "STAGE cron: deploy recurring routines + register them on the DEFAULT profile"
+  # Single-profile architecture: scripts live in /root/.hermes/scripts and the jobs
+  # are registered in the DEFAULT cron store (the default gateway is the only one
+  # running, so it is the only scheduler that ticks). Deterministic collectors that
+  # call gbrain/Composio directly live in /opt/brain/scripts.
+  [ -d "$REPO/orgo/routines" ] || { echo "SKIP: orgo/routines not in repo"; return 0; }
+  have hermes || { echo "SKIP: hermes not installed (run stage_runtime)"; return 0; }
+  local R="$REPO/orgo/routines" SD=/root/.hermes/scripts BS=/opt/brain/scripts
+  mkdir -p "$SD" "$BS"
+
+  # 1. shell routines -> default scripts dir (cron resolves --script relative to $HERMES_HOME/scripts)
+  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh; do
+    [ -f "$R/$s" ] && install -m 755 "$R/$s" "$SD/$s"
+  done
+  # 2. deterministic python collectors -> /opt/brain/scripts (what calendar-sync/ghl-sync call)
+  for p in calendar-collect.py ghl-collect.py; do
+    [ -f "$R/$p" ] && install -m 755 "$R/$p" "$BS/$p"
+  done
+
+  # 3. register jobs on the default profile (idempotent: hermes cron create upserts by name).
+  #    email-ingest runs via the cron WRAPPER (cold-start pre-check + retries) because the
+  #    default profile loads the box's full MCP set and gmail can lose the registration race.
+  if [ -n "${COMPOSIO_API_KEY:-}" ]; then
+    hermes cron create "15 * * * *" --name email-ingest --script email-ingest-cron.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create email-ingest (flags per hermes version)"
+    hermes cron create "30 5 * * *" --name calendar-sync --script calendar-sync.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create calendar-sync"
+  else
+    echo "NOTE: COMPOSIO_API_KEY unset; skipping email-ingest + calendar-sync (no Gmail/Calendar source)."
+  fi
+  if [ -n "${ENABLE_GHL_SYNC:-}" ]; then
+    hermes cron create "0 * * * *" --name ghl-sync --script ghl-sync.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create ghl-sync"
+  fi
+  echo "cron jobs registered (default profile):"; hermes cron list 2>/dev/null | grep -E "Name:|Next run:" || true
+  # NOTE: gbrain-dream (nightly brain compaction) is not yet a repo routine; add it to
+  # orgo/routines and this stage when it is reconciled to the default profile.
 }
 
 # =============================================================================
@@ -613,7 +661,7 @@ PY
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email onboard gateway portal verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
