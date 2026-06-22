@@ -597,6 +597,7 @@ AUTH_URL=https://${PORTAL_DOMAIN}
 NEXTAUTH_URL=https://${PORTAL_DOMAIN}
 AUTH_TRUST_HOST=true
 PORTAL_ALLOWLIST=${PORTAL_ALLOWLIST}
+NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}
 PORT=${PORTAL_PORT}
 NODE_ENV=production
 EOF
@@ -604,6 +605,9 @@ EOF
   else
     # keep the generated db password in sync with the role we just (re)set
     sed -i "s#^DATABASE_URL=.*#DATABASE_URL=postgresql://portal:${PPW}@127.0.0.1:5432/rereset_portal#" "$PORTAL/.env.local"
+    # ensure the client-side slug scope is baked in (clients are scoped to this box's tenant)
+    grep -q '^NEXT_PUBLIC_PORTAL_SLUG=' "$PORTAL/.env.local" \
+      || echo "NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}" >> "$PORTAL/.env.local"
   fi
 
   # 4. build
