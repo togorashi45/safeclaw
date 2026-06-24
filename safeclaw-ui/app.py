@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, Response
 
 # Reuse the existing onboarding credential validators (hit real upstream APIs).
 _REPO = Path(__file__).resolve().parents[1]
@@ -39,6 +39,47 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 HERMES_BIN = os.environ.get("HERMES_BIN", "hermes")
 GBRAIN_BIN = os.environ.get("GBRAIN_BIN", "gbrain")
 ENV_FILE = HERMES_HOME / ".env"
+
+# Brain HTTP MCP server (the ONE `gbrain serve --http` process; template issue 22).
+# The gbrain CLI cannot be used while that server runs — it holds the PGLite
+# single-writer lock — so ALL Console brain reads go through this endpoint.
+GBRAIN_HTTP_URL = os.environ.get("GBRAIN_HTTP_URL", "http://127.0.0.1:3131/mcp")
+GBRAIN_TOKEN_FILE = Path(os.environ.get("GBRAIN_TOKEN_FILE", "/opt/brain/.hermes-token"))
+
+
+def _brain_call(tool: str, arguments: dict | None = None, timeout: int = 30):
+    """Call a tool on the brain HTTP MCP server. Returns (ok, parsed_result_or_error)."""
+    import urllib.request
+    try:
+        token = GBRAIN_TOKEN_FILE.read_text().strip()
+    except Exception:
+        token = ""
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments or {}},
+    }).encode()
+    req = urllib.request.Request(
+        GBRAIN_HTTP_URL, data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode()
+    except Exception as e:  # conn refused / timeout / 401 …
+        return False, str(e)
+    # Server replies in SSE framing ("event: message\ndata: {...}") or bare JSON.
+    payload = next((l[5:].strip() for l in raw.splitlines() if l.startswith("data:")), raw)
+    try:
+        msg = json.loads(payload)
+        text = msg["result"]["content"][0]["text"]
+        try:
+            return True, json.loads(text)
+        except Exception:
+            return True, text
+    except Exception as e:
+        return False, f"unparseable brain reply: {e}"
+
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -170,9 +211,10 @@ def healthz():
 @app.get("/api/status")
 def api_status():
     env = _read_env()
-    # gbrain page count
-    rc, out = _run([GBRAIN_BIN, "list", "-n", "1000"], timeout=30)
-    pages = len([l for l in out.splitlines() if "\t" in l]) if rc == 0 else None
+    # gbrain page count — via the brain HTTP MCP (the CLI can't run while the
+    # HTTP server holds the PGLite writer lock; template issue 22)
+    ok, res = _brain_call("list_pages", {}, timeout=30)
+    pages = len(res) if ok and isinstance(res, list) else None
     cfg = HERMES_HOME / "config.yaml"
     model = "(unset)"
     if cfg.is_file():
@@ -275,6 +317,75 @@ def _composio(method, path, key, body=None):
         return json.load(urllib.request.urlopen(r, timeout=25))
     except Exception as exc:
         return {"_error": str(exc)}
+
+
+# ── One-click Composio OAuth connect (the customer "connect your accounts" page) ──
+# Serves the per-client connect-cards page (templates/connect.html) and mints a
+# fresh Composio OAuth link per click — the on-box port of the old Netlify
+# connect.js. The per-service auth_config_id / user_id / alias map lives in a
+# per-client JSON (COMPOSIO_SERVICES_FILE, default /opt/safeclaw/composio-services.json)
+# so the same template serves every client; only the JSON + COMPOSIO_API_KEY differ.
+# The API key stays server-side — the browser only ever gets the redirect_url.
+def _composio_services() -> dict:
+    path = os.environ.get("COMPOSIO_SERVICES_FILE", "/opt/safeclaw/composio-services.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@app.get("/connect-accounts")
+def connect_accounts():
+    return render_template("connect.html")
+
+
+@app.get("/connect")
+def composio_connect():
+    service = (request.args.get("service") or "").strip()
+    svc = _composio_services().get(service)
+    if not svc:
+        return Response("Unknown service. Go back and choose one of the listed Connect buttons.",
+                        400, {"Content-Type": "text/plain; charset=utf-8"})
+    key = os.environ.get("COMPOSIO_API_KEY", "").strip()
+    if not key:
+        return Response("Setup is missing a server-side Composio key. Please contact your admin.",
+                        500, {"Content-Type": "text/plain; charset=utf-8"})
+    d = _composio("POST", "/connected_accounts/link", key, {
+        "auth_config_id": svc["auth_config_id"],
+        "user_id": svc["user_id"],
+        "alias": svc.get("alias", service),
+    })
+    url = d.get("redirect_url") if isinstance(d, dict) else None
+    if not url:
+        return Response(f"Could not create a {svc.get('label', service)} connection link. "
+                        f"Please contact your admin.", 502, {"Content-Type": "text/plain; charset=utf-8"})
+    return redirect(url, code=302)
+
+
+@app.get("/api/composio/status")
+def composio_status():
+    """Per-service connection status for the connect page, keyed by service.
+    Returns e.g. {"gmail":"ACTIVE","calendar":"EXPIRED","googledocs":"ACTIVE"}.
+    The page uses this to badge already-connected services instead of "Ready"."""
+    key = os.environ.get("COMPOSIO_API_KEY", "").strip()
+    services = _composio_services()
+    if not key or not services:
+        return jsonify({})
+    d = _composio("GET", "/connected_accounts?limit=100", key)
+    by_uid = {}
+    if isinstance(d, dict):
+        for a in (d.get("items") or []):
+            uid, s = a.get("user_id"), a.get("status")
+            if not uid:
+                continue
+            # A user_id can have several accounts (e.g. a fresh pending one from a
+            # re-click). ACTIVE wins — never let a later non-active overwrite it.
+            if by_uid.get(uid) == "ACTIVE":
+                continue
+            by_uid[uid] = s
+    return jsonify({svc: by_uid.get((cfg or {}).get("user_id"))
+                    for svc, cfg in services.items()})
 
 
 @app.get("/api/gmail/accounts")
@@ -471,10 +582,29 @@ def api_selftest():
     checks.append(_check("Hermes CLI", _hermes_check))
 
     def _gbrain_check():
-        # 60s: PGLite cold-start can be slow, especially while other services restart
-        rc, out = _run([GBRAIN_BIN, "list", "-n", "1"], timeout=60)
-        return rc == 0, "responds" if rc == 0 else (out.strip()[:120] or "no output")
+        # Via the brain HTTP MCP — the gbrain CLI deadlocks on the PGLite writer
+        # lock while `gbrain serve --http` (tmux `brain`) is running (issue 22).
+        ok, res = _brain_call("list_pages", {}, timeout=60)
+        n = len(res) if ok and isinstance(res, list) else None
+        return ok, (f"responds ({n} pages)" if ok else str(res)[:120] or "no reply")
     checks.append(_check("GBrain (knowledge brain)", _gbrain_check))
+
+    def _embeddings_check():
+        # "Installed but not initialized" guard: a brain with no embedding
+        # provider (or unembedded chunks) means semantic search + the dream
+        # embed phase silently don't work. Surface it on the SYSTEM TEST card.
+        ok, stats = _brain_call("get_stats", {}, timeout=30)
+        if not ok or not isinstance(stats, dict):
+            return False, "brain unreachable — cannot verify embeddings"
+        chunks = stats.get("chunk_count", 0)
+        embedded = stats.get("embedded_count", 0)
+        if chunks == 0:
+            return True, "no content yet (seed a page to verify embeddings)"
+        if embedded < chunks:
+            return False, (f"only {embedded}/{chunks} chunks embedded — embedding "
+                           "provider missing or its API key is dead")
+        return True, f"all {embedded}/{chunks} chunks embedded"
+    checks.append(_check("Embeddings (semantic search)", _embeddings_check))
 
     def _profiles_check():
         missing = [r for r in ("reader", "actor")
