@@ -726,7 +726,7 @@ stage_connect() {
   # /opt/brain/.env (persisted by stage_composio_project).
   cat >/etc/supervisor/conf.d/safeclaw-connect.conf <<EOF
 [program:safeclaw-connect]
-command=/bin/bash -lc 'set -a; [ -f ${BRAIN}/.env ] && . ${BRAIN}/.env; set +a; HERMES_HOME=/root/.hermes COMPOSIO_SERVICES_FILE=${SVC} HOST=127.0.0.1 PORT=${CONNECT_PORT} /usr/bin/python3 ${REPO}/safeclaw-ui/app.py'
+command=/bin/bash -lc 'set -a; [ -f ${BRAIN}/.env ] && . ${BRAIN}/.env; [ -f /root/.hermes/.env ] && . /root/.hermes/.env; set +a; HERMES_HOME=/root/.hermes COMPOSIO_SERVICES_FILE=${SVC} HOST=127.0.0.1 PORT=${CONNECT_PORT} /usr/bin/python3 ${REPO}/safeclaw-ui/app.py'
 autostart=true
 autorestart=true
 startsecs=5
