@@ -664,6 +664,22 @@ environment=PORTAL_SECRET="${SEC}",CLIENT_SLUG="${PORTAL_SLUG}",PORTAL_NATIVE_UR
 EOF
   fi
 
+  # 7b. task board: mirror the client's SafeClaw board (tasks.db) -> this box's
+  #     Postgres tasks (what /api/c/tasks reads). Canonical script ships in the
+  #     portal repo; supervise it as portal-tasks-sync.
+  if [ -f "$PORTAL/scripts/box-tasks-sync/portal_tasks_sync.py" ]; then
+    install -D -m 755 "$PORTAL/scripts/box-tasks-sync/portal_tasks_sync.py" /root/.hermes/scripts/portal_tasks_sync.py
+    cat >/etc/supervisor/conf.d/portal-tasks-sync.conf <<EOF
+[program:portal-tasks-sync]
+command=/usr/bin/python3 /root/.hermes/scripts/portal_tasks_sync.py
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/portal-tasks-sync.log
+stderr_logfile=/var/log/portal-tasks-sync.log
+environment=PORTAL_ENV="${PORTAL}/.env.local",TASKS_DB="/opt/safeclaw/data/tasks.db"
+EOF
+  fi
+
   # 8. edge: add the portal hostname to the cloudflared tunnel (before the 404 catch).
   #    The DNS CNAME (PORTAL_DOMAIN -> <tunnel>.cfargotunnel.com) is created off-box.
   local CFG=/root/.cloudflared/config.yml
@@ -684,6 +700,7 @@ PY
   supervisorctl reread; supervisorctl update
   supervisorctl restart portal-app portal-zoom-ingest 2>/dev/null || true
   supervisorctl restart portal-brief 2>/dev/null || true
+  supervisorctl restart portal-tasks-sync 2>/dev/null || true
   echo "portal: built + supervised on :${PORTAL_PORT}; public at https://${PORTAL_DOMAIN} (needs the CF CNAME + Google redirect URI /api/auth/callback/google)."
 }
 
