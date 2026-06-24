@@ -736,8 +736,28 @@ PY
   echo "connect: safeclaw-ui supervised on :${CONNECT_PORT}; public at https://${CONNECT_DOMAIN}/connect-accounts (needs the CF CNAME + a filled composio-services.json)."
 }
 
+stage_health() {
+  say "STAGE health: box-health writer for the portal BrainStatus badge"
+  [ -f "$REPO/scripts/box/write_brain_health.py" ] || { echo "SKIP: write_brain_health.py not in repo"; return 0; }
+  install -D -m 755 "$REPO/scripts/box/write_brain_health.py" /root/.hermes/scripts/write_brain_health.py
+  # Supervised loop (these boxes run supervisor, not cron). Fails open in the
+  # portal, so a hiccup never shows a healthy box as offline.
+  cat >/etc/supervisor/conf.d/brain-health.conf <<'EOF'
+[program:brain-health]
+command=/bin/bash -c 'while true; do /usr/bin/python3 /root/.hermes/scripts/write_brain_health.py >/dev/null 2>&1; sleep 120; done'
+autostart=true
+autorestart=true
+startsecs=3
+stdout_logfile=/root/.hermes/logs/brain-health.log
+stderr_logfile=/root/.hermes/logs/brain-health.log
+EOF
+  supervisorctl reread; supervisorctl update
+  supervisorctl restart brain-health 2>/dev/null || supervisorctl start brain-health 2>/dev/null || true
+  echo "health: brain-health supervised (writes /opt/rereset-portal/.brain-health.json every 120s)."
+}
+
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal connect verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal connect health verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
