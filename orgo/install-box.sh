@@ -59,6 +59,10 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${AUTH_GOOGLE_ID:=}"                      # shared Google OAuth client id (NextAuth)
 : "${AUTH_GOOGLE_SECRET:=}"                  # shared Google OAuth client secret
 : "${PORTAL_INGEST_SECRET:=}"               # shared brief ingest secret; reused by the brief writer
+# Connect page (on-box Composio "connect your accounts" page, served by safeclaw-ui):
+: "${CONNECT_PORT:=8899}"                    # loopback port for the connect Flask app
+: "${CONNECT_DOMAIN:=safeclaw-${PORTAL_SLUG}.rereset.ai}"  # public hostname (needs a CF CNAME to the tunnel)
+: "${CONNECT_SERVICES_JSON:=}"               # optional path to a filled composio-services.json (from provision-composio.py)
 
 REPO=/opt/safeclaw
 PORTAL=/opt/rereset-portal
@@ -683,8 +687,57 @@ PY
   echo "portal: built + supervised on :${PORTAL_PORT}; public at https://${PORTAL_DOMAIN} (needs the CF CNAME + Google redirect URI /api/auth/callback/google)."
 }
 
+stage_connect() {
+  say "STAGE connect: on-box Composio connect page (safeclaw-ui)"
+  [ -d "$REPO/safeclaw-ui" ] || { echo "SKIP: safeclaw-ui not in repo"; return 0; }
+  pip3 install --break-system-packages -q flask requests pyyaml 2>/dev/null \
+    || echo "VERIFY: pip flask/requests/pyyaml for safeclaw-ui"
+  # Per-client service map (auth_config_id / user_id / alias). Built off-box by
+  # scripts/provision-composio.py; injected via CONNECT_SERVICES_JSON. Otherwise
+  # seed from the example with the slug filled (auth_config_id left to fill).
+  local SVC=/opt/safeclaw/composio-services.json
+  mkdir -p /opt/safeclaw
+  if [ ! -f "$SVC" ]; then
+    if [ -n "${CONNECT_SERVICES_JSON:-}" ] && [ -f "${CONNECT_SERVICES_JSON}" ]; then
+      install -m 644 "$CONNECT_SERVICES_JSON" "$SVC"
+    else
+      sed "s/<slug>/${PORTAL_SLUG}/g" "$REPO/safeclaw-ui/composio-services.example.json" > "$SVC"
+      echo "VERIFY: $SVC has ac_REPLACE placeholders - run scripts/provision-composio.py --client ${PORTAL_SLUG} --json and fill auth_config_id per service (or set CONNECT_SERVICES_JSON)."
+    fi
+  fi
+  # Supervised connect service (loopback). COMPOSIO_API_KEY is sourced from
+  # /opt/brain/.env (persisted by stage_composio_project).
+  cat >/etc/supervisor/conf.d/safeclaw-connect.conf <<EOF
+[program:safeclaw-connect]
+command=/bin/bash -lc 'set -a; [ -f ${BRAIN}/.env ] && . ${BRAIN}/.env; set +a; HERMES_HOME=/root/.hermes COMPOSIO_SERVICES_FILE=${SVC} HOST=127.0.0.1 PORT=${CONNECT_PORT} /usr/bin/python3 ${REPO}/safeclaw-ui/app.py'
+autostart=true
+autorestart=true
+startsecs=5
+stdout_logfile=/var/log/safeclaw-connect.log
+stderr_logfile=/var/log/safeclaw-connect.log
+EOF
+  # Edge: route the connect hostname through the cloudflared tunnel (before 404).
+  local CFG=/root/.cloudflared/config.yml
+  if [ -f "$CFG" ] && ! grep -q "$CONNECT_DOMAIN" "$CFG"; then
+    python3 - "$CFG" "$CONNECT_DOMAIN" "$CONNECT_PORT" <<'PY'
+import sys
+cfg, host, port = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = open(cfg).read().splitlines(); out = []
+for l in lines:
+    if l.strip() == "- service: http_status:404":
+        out += [f"  - hostname: {host}", f"    service: http://localhost:{port}"]
+    out.append(l)
+open(cfg, "w").write("\n".join(out) + "\n")
+PY
+    pkill -f "cloudflared tunnel" 2>/dev/null || true   # autorestarts with the new ingress
+  fi
+  supervisorctl reread; supervisorctl update
+  supervisorctl restart safeclaw-connect 2>/dev/null || supervisorctl start safeclaw-connect 2>/dev/null || true
+  echo "connect: safeclaw-ui supervised on :${CONNECT_PORT}; public at https://${CONNECT_DOMAIN}/connect-accounts (needs the CF CNAME + a filled composio-services.json)."
+}
+
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal connect verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
