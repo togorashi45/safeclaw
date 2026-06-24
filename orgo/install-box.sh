@@ -614,6 +614,14 @@ EOF
       || echo "NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}" >> "$PORTAL/.env.local"
   fi
 
+  # 3b. HARDENING (client boxes only): never ship the /me + /admin command center
+  # onto a client's box (security audit 2026-06-24, finding T-2). clients.ts is
+  # already runtime-scoped to NEXT_PUBLIC_PORTAL_SLUG; dropping these route trees
+  # removes the admin surface at rest so it is never built or prerendered here.
+  if [ -n "${PORTAL_SLUG}" ]; then
+    rm -rf "$PORTAL/src/app/me" "$PORTAL/src/app/admin"
+  fi
+
   # 4. build
   ( cd "$PORTAL" && npm ci && npm run build ) || { echo "VERIFY: portal build failed"; return 0; }
 
