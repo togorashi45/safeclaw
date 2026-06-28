@@ -59,6 +59,15 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${AUTH_GOOGLE_ID:=}"                      # shared Google OAuth client id (NextAuth)
 : "${AUTH_GOOGLE_SECRET:=}"                  # shared Google OAuth client secret
 : "${PORTAL_INGEST_SECRET:=}"               # shared brief ingest secret; reused by the brief writer
+# Portal ROLE: client (default) = single-tenant /c box; admin = the me.rereset.ai
+# command center (keeps /me + /admin, sees ALL tenants). The admin variant is gated on
+# this flag so a client box can never accidentally ship the admin surface.
+: "${PORTAL_ROLE:=client}"                   # client | admin
+: "${ADMIN_ALLOWLIST:=}"                      # admin role: comma-list of superadmin emails (e.g. jake@rspur.com)
+: "${AUTH_SECRET:=}"                          # inject the SHARED secret to keep cross-subdomain SSO; blank = per-box generated
+: "${AUTH_COOKIE_DOMAIN:=}"                   # set to .rereset.ai to share the session cookie across all *.rereset.ai portals
+: "${GBRAIN_EMBED_MODEL:=openrouter:openai/text-embedding-3-small}"  # brain embed model; override per box (e.g. ollama:nomic-embed-text)
+: "${TS_AUTHKEY:=}"                           # Tailscale auth key; set to join the tailnet (off-box writers reach this box over it)
 # Connect page (on-box Composio "connect your accounts" page, served by safeclaw-ui):
 : "${CONNECT_PORT:=8899}"                    # loopback port for the connect Flask app
 : "${CONNECT_DOMAIN:=safeclaw-${PORTAL_SLUG}.rereset.ai}"  # public hostname (needs a CF CNAME to the tunnel)
@@ -112,6 +121,29 @@ stage_base() {
   have cloudflared || { curl -fsSL -o /usr/local/bin/cloudflared \
     https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
     && chmod +x /usr/local/bin/cloudflared; }
+  # Tailscale: off-box writers reach this box's Postgres/brain over the tailnet (Orgo has no
+  # public ports). Install always; only join when TS_AUTHKEY is set. Orgo is systemd-less, so
+  # fall back to running tailscaled under supervisor.
+  have tailscale || { curl -fsSL https://tailscale.com/install.sh | sh || echo "VERIFY: tailscale install"; }
+  if [ -n "${TS_AUTHKEY}" ]; then
+    if ! pgrep -x tailscaled >/dev/null 2>&1; then
+      if ! { have systemctl && systemctl enable --now tailscaled 2>/dev/null; }; then
+        mkdir -p /var/lib/tailscale /run/tailscale
+        cat >/etc/supervisor/conf.d/tailscaled.conf <<EOF
+[program:tailscaled]
+command=$(command -v tailscaled) --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/tailscaled.log
+stderr_logfile=/var/log/tailscaled.log
+EOF
+        supervisorctl reread 2>/dev/null; supervisorctl update 2>/dev/null; sleep 2
+      fi
+    fi
+    tailscale up --authkey "${TS_AUTHKEY}" --hostname "safeclaw-${CLIENT_SLUG}" --ssh 2>/dev/null \
+      && echo "tailscale: joined as safeclaw-${CLIENT_SLUG} ($(tailscale ip -4 2>/dev/null | head -1))" \
+      || echo "VERIFY: tailscale up (authkey valid + tailscaled running?)"
+  fi
   echo "base versions:"; psql --version; bun --version; node -v; cloudflared --version | head -1
 }
 
@@ -359,7 +391,7 @@ stage_brain_init() {
   [ -z "$OPENROUTER_API_KEY" ] && { echo "SKIP: OPENROUTER_API_KEY needed for embeddings"; return 0; }
   set -a; . "$BRAIN/.env"; set +a
   # Embedding model MUST be named at init so the vector column is the right width.
-  gbrain init --url "$GBRAIN_DATABASE_URL" --embedding-model openrouter:openai/text-embedding-3-small \
+  gbrain init --url "$GBRAIN_DATABASE_URL" --embedding-model "$GBRAIN_EMBED_MODEL" \
     || echo "VERIFY: gbrain init flags for the Postgres path"
   gbrain config set sync.repo_path "$BRAIN/repo" 2>/dev/null || true
   ( cd "$BRAIN/repo" && git add -A && git commit -q -m "initial seed" 2>/dev/null || true )
@@ -589,36 +621,48 @@ stage_portal() {
     "GRANT ALL ON SCHEMA public TO portal; GRANT ALL ON ALL TABLES IN SCHEMA public TO portal; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO portal;" >/dev/null 2>&1
 
   # 3. env. AUTH_SECRET persists a rebuild; secrets stay on the box, chmod 600.
+  #    Inject AUTH_SECRET (+ AUTH_COOKIE_DOMAIN=.rereset.ai) to SHARE cross-subdomain SSO across
+  #    the fleet; leave AUTH_SECRET blank to generate a per-box secret. Role decides the tenant
+  #    scope: client = NEXT_PUBLIC_PORTAL_SLUG (one tenant); admin = unset (sees all) + ADMIN_ALLOWLIST.
   local SEC="${PORTAL_INGEST_SECRET:-$(gen 24)}"
   if [ ! -f "$PORTAL/.env.local" ] || ! grep -q '^AUTH_SECRET=' "$PORTAL/.env.local"; then
     cat >"$PORTAL/.env.local" <<EOF
 DATABASE_URL=postgresql://portal:${PPW}@127.0.0.1:5432/rereset_portal
 INGEST_SECRET=${SEC}
-AUTH_SECRET=$(gen 32)
+AUTH_SECRET=${AUTH_SECRET:-$(gen 32)}
 AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID}
 AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET}
 AUTH_URL=https://${PORTAL_DOMAIN}
 NEXTAUTH_URL=https://${PORTAL_DOMAIN}
 AUTH_TRUST_HOST=true
 PORTAL_ALLOWLIST=${PORTAL_ALLOWLIST}
-NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}
 PORT=${PORTAL_PORT}
 NODE_ENV=production
 EOF
+    [ -n "${AUTH_COOKIE_DOMAIN}" ] && echo "AUTH_COOKIE_DOMAIN=${AUTH_COOKIE_DOMAIN}" >> "$PORTAL/.env.local"
+    if [ "${PORTAL_ROLE}" = "admin" ]; then
+      echo "ADMIN_ALLOWLIST=${ADMIN_ALLOWLIST}" >> "$PORTAL/.env.local"
+    else
+      echo "NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}" >> "$PORTAL/.env.local"
+    fi
     chmod 600 "$PORTAL/.env.local"
   else
     # keep the generated db password in sync with the role we just (re)set
     sed -i "s#^DATABASE_URL=.*#DATABASE_URL=postgresql://portal:${PPW}@127.0.0.1:5432/rereset_portal#" "$PORTAL/.env.local"
-    # ensure the client-side slug scope is baked in (clients are scoped to this box's tenant)
-    grep -q '^NEXT_PUBLIC_PORTAL_SLUG=' "$PORTAL/.env.local" \
-      || echo "NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}" >> "$PORTAL/.env.local"
+    if [ "${PORTAL_ROLE}" = "admin" ]; then
+      grep -q '^ADMIN_ALLOWLIST=' "$PORTAL/.env.local" || echo "ADMIN_ALLOWLIST=${ADMIN_ALLOWLIST}" >> "$PORTAL/.env.local"
+      sed -i '/^NEXT_PUBLIC_PORTAL_SLUG=/d' "$PORTAL/.env.local"   # admin sees all tenants: never scope-filter
+    else
+      grep -q '^NEXT_PUBLIC_PORTAL_SLUG=' "$PORTAL/.env.local" \
+        || echo "NEXT_PUBLIC_PORTAL_SLUG=${PORTAL_SLUG}" >> "$PORTAL/.env.local"
+    fi
   fi
 
-  # 3b. HARDENING (client boxes only): never ship the /me + /admin command center
-  # onto a client's box (security audit 2026-06-24, finding T-2). clients.ts is
-  # already runtime-scoped to NEXT_PUBLIC_PORTAL_SLUG; dropping these route trees
-  # removes the admin surface at rest so it is never built or prerendered here.
-  if [ -n "${PORTAL_SLUG}" ]; then
+  # 3b. HARDENING (client boxes only): never ship the /me + /admin command center onto a
+  # client's box (security audit 2026-06-24, finding T-2). The admin instance
+  # (PORTAL_ROLE=admin, me.rereset.ai) KEEPS them. clients.ts is runtime-scoped to
+  # NEXT_PUBLIC_PORTAL_SLUG, so dropping these trees removes the admin surface at rest.
+  if [ "${PORTAL_ROLE}" != "admin" ] && [ -n "${PORTAL_SLUG}" ]; then
     rm -rf "$PORTAL/src/app/me" "$PORTAL/src/app/admin"
   fi
 
