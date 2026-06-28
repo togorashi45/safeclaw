@@ -86,6 +86,15 @@ say() { echo; echo "---- $* ----"; }
 stage_base() {
   say "STAGE base: system packages"
   export DEBIAN_FRONTEND=noninteractive
+  # Swap: Orgo/VPS boxes ship with 0 swap, so a memory spike OOM-kills services. Add an
+  # 8G swapfile once so the box survives bursts (critical for the admin box: brain + portal
+  # + local embedder on 8G RAM). Idempotent.
+  if [ "$(swapon --show --noheadings 2>/dev/null | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
+    ( fallocate -l 8G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=8192 2>/dev/null ) \
+      && chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile \
+      && { grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab; } \
+      && echo "swap: 8G swapfile active" || echo "VERIFY: swapfile setup"
+  fi
   # Full PATH incl sbin: orgo's non-interactive shell drops /usr/sbin+/sbin, which
   # breaks dpkg (start-stop-daemon) and every downstream install (validated live 2026-06-16).
   export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin
