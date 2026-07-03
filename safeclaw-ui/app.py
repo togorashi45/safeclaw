@@ -23,6 +23,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, Response
@@ -351,10 +352,13 @@ def composio_connect():
     if not key:
         return Response("Setup is missing a server-side Composio key. Please contact your admin.",
                         500, {"Content-Type": "text/plain; charset=utf-8"})
+    # Alias must be unique per entity: a prior click leaves a PENDING account
+    # holding the alias and Composio then 400s every retry ("alias already in
+    # use"), bricking the button. Timestamp each attempt instead.
     d = _composio("POST", "/connected_accounts/link", key, {
         "auth_config_id": svc["auth_config_id"],
         "user_id": svc["user_id"],
-        "alias": svc.get("alias", service),
+        "alias": f'{svc.get("alias", service)}-{int(time.time())}',
     })
     url = d.get("redirect_url") if isinstance(d, dict) else None
     if not url:
