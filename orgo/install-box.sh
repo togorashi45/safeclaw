@@ -423,6 +423,72 @@ stage_hermes_config() {
 }
 
 # =============================================================================
+stage_composio_mcp() {
+  # Ported from Sten (Vasanth19/sten @ 3f2f3f5, live-proven 2026-07-02): one MCP
+  # server per box bound to the box's toolkits, agent connects to a per-box url.
+  # Replaces the manual Console /api/gmail/wire step. Idempotent; re-run after
+  # adding a toolkit or reconnecting an account (this IS the reconcile path).
+  say "STAGE composio_mcp: per-box Composio MCP server + Hermes wiring"
+  [ -d "$REPO" ] || { echo "SKIP: repo not present (run stage_repo)"; return 0; }
+  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.bun/bin
+  have node || { echo "SKIP: node not installed (stage_base installs node 20)"; return 0; }
+  # Key comes from $BRAIN/.env (persisted by stage_composio_project); never from install.env here.
+  set -a; [ -f "$BRAIN/.env" ] && . "$BRAIN/.env"; set +a
+  [ -n "${COMPOSIO_API_KEY:-}" ] || { echo "SKIP: no COMPOSIO_API_KEY in $BRAIN/.env (run stage_composio_project)"; return 0; }
+  # Provisioner runs from its own dir so ESM resolves @composio/core locally.
+  local PDIR=/opt/composio-provision
+  mkdir -p "$PDIR"
+  cp "$REPO/orgo/composio-provision-mcp.mjs" "$PDIR/"
+  [ -f "$PDIR/package.json" ] || echo '{"name":"composio-provision","private":true,"type":"module","dependencies":{"@composio/core":"^0.13.1"}}' > "$PDIR/package.json"
+  ( cd "$PDIR" && npm install --no-fund --no-audit --loglevel=error ) || { echo "FAIL: npm install @composio/core"; return 1; }
+  mkdir -p /opt/safeclaw
+  local OUT
+  if ! OUT=$(cd "$PDIR" && \
+      COMPOSIO_API_KEY="$COMPOSIO_API_KEY" \
+      CLIENT_SLUG="$CLIENT_SLUG" \
+      COMPOSIO_USER_ID="${COMPOSIO_USER_ID:-client:$CLIENT_SLUG}" \
+      COMPOSIO_TOOLKITS="${COMPOSIO_TOOLKITS:-gmail,googlecalendar,googledrive,slack}" \
+      COMPOSIO_ENV_FILES="$BRAIN/.env,/root/.hermes/.env" \
+      COMPOSIO_SERVICES_JSON=/opt/safeclaw/composio-services.json \
+      node composio-provision-mcp.mjs); then
+    echo "FAIL: composio-provision-mcp.mjs (see stderr above)"; return 1
+  fi
+  echo "provisioned: $OUT"
+  # Wire mcp_servers.composio into the default profile config. Strip-when-absent:
+  # a bare/empty url in the config breaks Hermes boot (empty-scheme MCP url), so
+  # the entry only exists when a real https url does.
+  set -a; . "$BRAIN/.env"; set +a
+  python3 - <<'PY'
+import os, yaml
+cfg_path = "/root/.hermes/config.yaml"
+cfg = {}
+if os.path.exists(cfg_path):
+    cfg = yaml.safe_load(open(cfg_path)) or {}
+mcp = cfg.setdefault("mcp_servers", {})
+url = os.environ.get("COMPOSIO_MCP_URL", "")
+if url.startswith("https://"):
+    mcp["composio"] = {
+        "url": url,
+        "headers": {
+            "x-api-key": os.environ.get("COMPOSIO_API_KEY", ""),
+            "x-composio-user-id": os.environ.get("COMPOSIO_USER_ID", ""),
+        },
+    }
+else:
+    mcp.pop("composio", None)  # never leave a bare url behind
+yaml.safe_dump(cfg, open(cfg_path, "w"), default_flow_style=False, sort_keys=False)
+print("hermes config: mcp_servers.composio " + ("wired" if url.startswith("https://") else "stripped (no url)"))
+PY
+  # Hermes binds MCP tools at boot; if the gateway is already up, restart it so
+  # the new server binds. Cold-start note: Composio MCP tools are absent ~50% of
+  # cold spawns; the first turn may need a retry (Sten pitfall 9).
+  if supervisorctl status hermes-gateway-actor 2>/dev/null | grep -q RUNNING; then
+    supervisorctl restart hermes-gateway-actor || true
+    echo "gateway restarted to bind the Composio MCP."
+  fi
+}
+
+# =============================================================================
 stage_identity() {
   say "STAGE identity: SOUL.md"
   mkdir -p /root/.hermes
@@ -835,7 +901,7 @@ EOF
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config identity skills channels email cron onboard gateway portal connect health verify)
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config composio_mcp identity skills channels email cron onboard gateway portal connect health verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
