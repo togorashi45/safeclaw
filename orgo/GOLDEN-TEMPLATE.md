@@ -73,7 +73,7 @@ Two parts, both in this repo.
 
 OAuth for Gmail, Calendar, Docs, Sheets, and Tasks runs through **Composio**, one scoped workspace/key per client (keys are not interchangeable across boxes).
 - Env: `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` in `install.env`. The per-box Composio MCP server is provisioned by `stage_composio_mcp` (`orgo/composio-provision-mcp.mjs`) and wired into the single default profile config.
-- **Self-service connect:** the on-box connect page (`safeclaw-ui`, `stage_connect`, `:8899`) is where a client clicks to authorize each provider; the `composio-connect-mcp` (in `orgo/onboarding/`) gives the agent the same power during the onboarding interview.
+- **Self-service connect:** the portal's **Connections tab** (the Sten Composio wrapper lifted into `rereset-portal`, branch `feat/sten-integrations`) is where a client authorizes each provider; it runs the Composio reconcile and gateway restart on the box after a connect. The `composio-connect-mcp` (in `orgo/onboarding/`) gives the agent the same power during the onboarding interview. The old standalone connect page (`safeclaw-ui`, `stage_connect`, `:8899`) is a legacy opt-in, no longer in the default install.
 - **Native ingestion routines (deployed + scheduled by `stage_cron`):**
   - `orgo/routines/email-ingest-cron.sh` (wraps `email-ingest.sh`) into the brain (hourly). Playbook `skills/email-to-brain`.
   - `orgo/routines/calendar-collect.py` + `calendar-sync.sh` into the brain (daily). Playbook `skills/calendar-to-brain`.
@@ -110,7 +110,7 @@ What the MVP deliberately leaves out: a full automated eval harness, CI, and hea
 
 ## Provisioning order (new client box)
 
-1. `orgo/install-box.sh` (canonical installer) -> base box, Postgres brain (PARA-seeded), gateway (single default profile), cron routines, channels, portal, connect page (per its stages). `stage_health` + `stage_verify` are the verify pass.
+1. `orgo/install-box.sh` (canonical installer) -> base box, Postgres brain (PARA-seeded), gateway (single default profile), cron routines, channels, portal with Connections tab (per its stages). `stage_health` + `stage_verify` are the verify pass.
 2. Fill `/opt/install.env` (identity, brain, LLM, Composio, channels, GHL if applicable; the required vars are declared at the top of `install-box.sh`, example at `orgo/install.env.admin.example`).
 3. Deploy the agent persona: fill `orgo/SOUL.template.md` for the client, strip the comment header, save it on the box as `~/.hermes/SOUL.md`.
 4. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).

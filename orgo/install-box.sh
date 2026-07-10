@@ -846,7 +846,11 @@ PY
 }
 
 stage_connect() {
-  say "STAGE connect: on-box Composio connect page (safeclaw-ui)"
+  # LEGACY OPT-IN: superseded by the portal's Connections tab (Sten Composio
+  # wrapper lifted into rereset-portal). Not in the default ALL run; invoke
+  # explicitly (`install-box.sh connect`) only if a box needs the standalone
+  # page while the portal tab is being validated.
+  say "STAGE connect: on-box Composio connect page (safeclaw-ui, legacy opt-in)"
   [ -d "$REPO/safeclaw-ui" ] || { echo "SKIP: safeclaw-ui not in repo"; return 0; }
   pip3 install --break-system-packages -q flask requests pyyaml 2>/dev/null \
     || echo "VERIFY: pip flask/requests/pyyaml for safeclaw-ui"
@@ -915,7 +919,9 @@ EOF
 }
 
 # ---- driver ----------------------------------------------------------------
-ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config composio_mcp identity skills channels email cron onboard gateway portal connect health verify)
+# `connect` (standalone safeclaw-ui page) is deliberately NOT in ALL: the portal's
+# Connections tab is the client-facing connect surface now. Run it explicitly if needed.
+ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config composio_mcp identity skills channels email cron onboard gateway portal health verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
 for t in "${TARGETS[@]}"; do "stage_${t}"; done
 echo "================ install-box done $(date -u) ================"
