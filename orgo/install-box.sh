@@ -414,10 +414,25 @@ stage_brain_init() {
   say "STAGE brain_init: gbrain on Postgres + embeddings"
   [ -z "$OPENROUTER_API_KEY" ] && { echo "SKIP: OPENROUTER_API_KEY needed for embeddings"; return 0; }
   set -a; . "$BRAIN/.env"; set +a
+  # Legacy gbrain config poisons init: a pre-v2 /root/.gbrain/config.json (pglite
+  # generation) carries its old embedding_dimensions into the new Postgres schema,
+  # so the vector column comes out the wrong width (768 vs 1536, validated live
+  # 2026-07-10 on the Atomic Stays rebuild). Move it aside so init starts clean.
+  if [ -f /root/.gbrain/config.json ] && grep -q '"engine": *"pglite"' /root/.gbrain/config.json; then
+    mv /root/.gbrain "/root/.gbrain.pre-v2.$(date +%s)"
+    echo "legacy pglite gbrain config moved aside (fresh init)"
+  fi
   # Embedding model MUST be named at init so the vector column is the right width.
+  # (Flag validated live 2026-07-10: gbrain 0.42 accepts --url and --embedding-model.)
   gbrain init --url "$GBRAIN_DATABASE_URL" --embedding-model "$GBRAIN_EMBED_MODEL" \
     || echo "VERIFY: gbrain init flags for the Postgres path"
   gbrain config set sync.repo_path "$BRAIN/repo" 2>/dev/null || true
+  # gbrain >=0.42 resolves the sync path from the DB-backed sources table, and a
+  # re-init against a recreated DB leaves the default source with a NULL
+  # local_path ("Source \"default\" has no local_path", validated live 2026-07-10).
+  # 'sources add default' refuses (already registered), so set it directly.
+  sudo -u postgres psql -d brain -c \
+    "UPDATE sources SET local_path='$BRAIN/repo' WHERE id='default' AND local_path IS NULL;" 2>/dev/null || true
   # PARA + OKF skeleton: the brain repo is organized from day one (inbox /
   # projects / areas / resources / archive, each with an OKF index page). The
   # agent's filing rules live in SOUL.md; these pages are the structure they
@@ -431,7 +446,11 @@ stage_brain_init() {
     echo "brain repo seeded with the PARA skeleton (inbox/projects/areas/resources/archive)."
   fi
   ( cd "$BRAIN/repo" && git add -A && git commit -q -m "initial seed" 2>/dev/null || true )
-  gbrain sync 2>/dev/null || true   # index the seed pages; harmless if the subcommand differs
+  # --full: the incremental bookmark can believe it is caught up after a re-init
+  # (checkpoint survives a DB recreate), silently skipping the seed pages
+  # (validated live 2026-07-10). A full sync of the tiny seed set is cheap.
+  gbrain sync --full 2>&1 | tail -3 || true
+  gbrain extract --stale 2>/dev/null || true   # link/timeline extraction for the seed pages
 }
 
 # =============================================================================
