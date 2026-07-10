@@ -394,8 +394,13 @@ stage_runtime() {
   if ! have gbrain; then
     [ -d /opt/gbrain-src/.git ] || git clone https://github.com/garrytan/gbrain.git /opt/gbrain-src
     ( cd /opt/gbrain-src && bun install && bun link )
-    ln -sf "$(command -v gbrain 2>/dev/null || echo /root/.bun/bin/gbrain)" /usr/local/bin/gbrain 2>/dev/null || true
   fi
+  # Global symlink OUTSIDE the install-if-missing block: a legacy box can already
+  # have gbrain on /root/.bun/bin (bun global install), in which case the block is
+  # skipped and non-login shells (supervisor, cron) still could not find gbrain
+  # (validated live 2026-07-10 on the Atomic Stays rebuild).
+  [ -e /usr/local/bin/gbrain ] \
+    || ln -sf "$(command -v gbrain 2>/dev/null || echo /root/.bun/bin/gbrain)" /usr/local/bin/gbrain 2>/dev/null || true
   # hermes: setup-hermes.sh lives at scripts/ (NOT orgo/setup/). Run BARE so a pipe
   # cannot mask its exit code (issue 4).
   if ! have hermes; then
