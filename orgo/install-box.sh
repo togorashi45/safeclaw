@@ -554,9 +554,12 @@ stage_identity() {
 stage_skills() {
   say "STAGE skills: apply profile $SKILL_PROFILE + skill-router"
   [ -d "$REPO" ] || { echo "SKIP: repo not present"; return 0; }
-  python3 "$REPO/tools/skills_manifest.py" --profile "$SKILL_PROFILE" 2>/dev/null \
-    || echo "VERIFY: skills_manifest.py flags (--profile $SKILL_PROFILE)"
-  bash "$REPO/tools/apply_skill_profile.sh" "$SKILL_PROFILE" 2>/dev/null || true
+  # apply_skill_profile.sh is the canonical entrypoint: it runs skills_manifest.py
+  # itself with the required --skills-dir/--out args, prunes, and writes
+  # SKILL_INDEX.md. (The old direct skills_manifest.py call here was malformed:
+  # --skills-dir and --out are required. Validated live 2026-07-10.)
+  bash "$REPO/tools/apply_skill_profile.sh" "$SKILL_PROFILE" \
+    || echo "VERIFY: apply_skill_profile.sh $SKILL_PROFILE (profile in config/skill-profiles.yaml?)"
 }
 
 # =============================================================================

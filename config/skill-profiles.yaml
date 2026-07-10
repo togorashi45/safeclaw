@@ -95,3 +95,14 @@ profiles:
     description: Elgin (GHL + marketing) - campaigns, CRM, content.
     keep_skills_add: [ghl-to-brain]
     drop_categories_add: [github, software-development, data-science, devops]
+
+  # ── client ────────────────────────────────────────────────────────────────
+  # Template for a CLIENT box (the v2 golden install, SKILL_PROFILE=client).
+  # Starts from the actor set (the client's agent drafts, files, and runs its
+  # own workflows) and drops the developer tooling a business principal's box
+  # never needs. Keeps the integration skills (email/calendar to brain) and
+  # the real-estate pack via inheritance.
+  client:
+    inherits: actor
+    description: Default skill set for a client box (v2 golden template).
+    drop_categories_add: [github, software-development, data-science, devops]
