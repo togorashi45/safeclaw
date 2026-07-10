@@ -32,7 +32,7 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 
 # ---- required config (from install.env) ------------------------------------
 : "${CLIENT_SLUG:?set CLIENT_SLUG (e.g. kim)}"
-: "${SKILL_PROFILE:=team-member}"          # e.g. team-kim, base, actor
+: "${SKILL_PROFILE:=team-member}"          # e.g. team-kim, base
 : "${SAFECLAW_REF:=golden-template}"       # branch/tag to install
 : "${HERMES_MODEL:=glm-4.7}"
 : "${HERMES_BASE_URL:=https://ollama.com/v1}"
@@ -71,7 +71,7 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 # Connect page (on-box Composio "connect your accounts" page, served by safeclaw-ui):
 : "${CONNECT_PORT:=8899}"                    # loopback port for the connect Flask app
 : "${CONNECT_DOMAIN:=safeclaw-${PORTAL_SLUG}.rereset.ai}"  # public hostname (needs a CF CNAME to the tunnel)
-: "${CONNECT_SERVICES_JSON:=}"               # optional path to a filled composio-services.json (from provision-composio.py)
+: "${CONNECT_SERVICES_JSON:=}"               # optional path to a filled composio-services.json (from orgo/composio-setup-authconfigs.sh)
 
 REPO=/opt/safeclaw
 PORTAL=/opt/rereset-portal
@@ -261,8 +261,8 @@ stage_backup() {
   say "STAGE backup: daily brain pg_dump + configs, supervised (cron is absent here)"
   # The brain lives in Postgres, so a pg_dump is the backup that matters. cron is
   # absent on orgo boxes, so a tiny supervisord timer is the reboot-safe scheduler.
-  mkdir -p /opt/backups /root/.hermes/profiles/actor/scripts
-  cat >/root/.hermes/profiles/actor/scripts/daily-backup.sh <<'BK'
+  mkdir -p /opt/backups /root/.hermes/scripts
+  cat >/root/.hermes/scripts/daily-backup.sh <<'BK'
 #!/usr/bin/env bash
 # Daily backup: brain DATABASE (pg_dump) + brain files + hermes config. Keeps 7 days.
 BACKUP_DIR=/opt/backups
@@ -275,15 +275,14 @@ else
   echo "PG_DUMP FAILED"; rm -f "$BACKUP_DIR/brain-db-$DATE.dump"
 fi
 tar -czf "$BACKUP_DIR/brain-files-$DATE.tar.gz" -C /opt --exclude='brain/.gbrain*' --exclude='brain/*.pglite*' brain 2>/dev/null
-tar -czf "$BACKUP_DIR/hermes-configs-$DATE.tar.gz" -C /root/.hermes config.yaml .env 2>/dev/null
-[ -d /root/.hermes/profiles/actor ] && tar -czf "$BACKUP_DIR/hermes-actor-$DATE.tar.gz" -C /root/.hermes/profiles actor 2>/dev/null
+tar -czf "$BACKUP_DIR/hermes-configs-$DATE.tar.gz" -C /root/.hermes config.yaml .env cron scripts SOUL.md 2>/dev/null
 find "$BACKUP_DIR" -name 'brain-db-*.dump' -mtime +$KEEP_DAYS -delete
 find "$BACKUP_DIR" -name '*.tar.gz' -mtime +$KEEP_DAYS -delete
 BK
-  chmod +x /root/.hermes/profiles/actor/scripts/daily-backup.sh
+  chmod +x /root/.hermes/scripts/daily-backup.sh
   cat >/opt/brain-backup-loop.sh <<'LOOP'
 #!/usr/bin/env bash
-SCRIPT=/root/.hermes/profiles/actor/scripts/daily-backup.sh
+SCRIPT=/root/.hermes/scripts/daily-backup.sh
 while true; do
   now=$(date +%s)
   target=$(date -d 'today 09:10' +%s 2>/dev/null || echo $((now+86400)))
@@ -303,7 +302,7 @@ stdout_logfile=/var/log/brain-backup.log
 stderr_logfile=/var/log/brain-backup.log
 CONF
   supervisorctl reread; supervisorctl update
-  bash /root/.hermes/profiles/actor/scripts/daily-backup.sh || true
+  bash /root/.hermes/scripts/daily-backup.sh || true
   echo "backup: first dump written to /opt/backups; daily timer running under supervisor."
 }
 
@@ -482,8 +481,8 @@ PY
   # Hermes binds MCP tools at boot; if the gateway is already up, restart it so
   # the new server binds. Cold-start note: Composio MCP tools are absent ~50% of
   # cold spawns; the first turn may need a retry (Sten pitfall 9).
-  if supervisorctl status hermes-gateway-actor 2>/dev/null | grep -q RUNNING; then
-    supervisorctl restart hermes-gateway-actor || true
+  if supervisorctl status hermes-gateway 2>/dev/null | grep -q RUNNING; then
+    supervisorctl restart hermes-gateway || true
     echo "gateway restarted to bind the Composio MCP."
   fi
 }
@@ -543,23 +542,19 @@ EOF
   # Telegram: seed the bot token + numeric allowlist so the gateway actually enables
   # the platform. Without a token in the loaded env the gateway boots "No messaging
   # platforms enabled" and silently ignores every message (bit the fleet 2026-06-19).
-  # Canonical home per the golden docs is the ACTOR profile .env (token lives only with
-  # the actor). We seed BOTH the default and actor profile .env because install-box.sh
-  # starts the gateway on the default profile, while a box migrated to
-  # `hermes gateway run --profile actor` (per GOLDEN-TEMPLATE.md) reads the actor copy.
-  # Only one gateway runs per box, so there is no second getUpdates poller either way.
+  # The gateway runs on the single default profile, so the token lives in the
+  # default .env only.
   if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    for env in /root/.hermes/.env /root/.hermes/profiles/actor/.env; do
-      mkdir -p "$(dirname "$env")"; touch "$env"
-      grep -q '^TELEGRAM_BOT_TOKEN=' "$env" || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" >> "$env"
-      if [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
-        grep -q '^TELEGRAM_ALLOWED_USERS=' "$env" || echo "TELEGRAM_ALLOWED_USERS=$TELEGRAM_ALLOWED_USERS" >> "$env"
-      fi
-      chmod 600 "$env" 2>/dev/null || true
-    done
-    echo "Telegram token seeded into default + actor profile .env (allowlist: ${TELEGRAM_ALLOWED_USERS:-<UNSET - bot will deny everyone!>})."
+    env=/root/.hermes/.env
+    mkdir -p "$(dirname "$env")"; touch "$env"
+    grep -q '^TELEGRAM_BOT_TOKEN=' "$env" || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" >> "$env"
+    if [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
+      grep -q '^TELEGRAM_ALLOWED_USERS=' "$env" || echo "TELEGRAM_ALLOWED_USERS=$TELEGRAM_ALLOWED_USERS" >> "$env"
+    fi
+    chmod 600 "$env" 2>/dev/null || true
+    echo "Telegram token seeded into the default profile .env (allowlist: ${TELEGRAM_ALLOWED_USERS:-<UNSET - bot will deny everyone!>})."
   else
-    echo "NOTE: TELEGRAM_BOT_TOKEN not set; skipping Telegram seed (fill it in client.env)."
+    echo "NOTE: TELEGRAM_BOT_TOKEN not set; skipping Telegram seed (fill it in install.env)."
   fi
 }
 
@@ -628,18 +623,21 @@ stage_cron() {
 
 # =============================================================================
 stage_gateway() {
-  say "STAGE gateway: consolidated hermes-gateway-actor"
+  say "STAGE gateway: hermes-gateway (single default profile)"
   # HERMES_ALLOW_ROOT_GATEWAY=1: orgo boxes run as root; without it the gateway
   # refuses to start ("Refusing to run as root", validated live 2026-06-16).
-  cat >/etc/supervisor/conf.d/hermes-gateway-actor.conf <<'EOF'
-[program:hermes-gateway-actor]
+  # A prior-generation box may carry hermes-gateway-actor; retire it so only one
+  # gateway polls the channels.
+  rm -f /etc/supervisor/conf.d/hermes-gateway-actor.conf
+  cat >/etc/supervisor/conf.d/hermes-gateway.conf <<'EOF'
+[program:hermes-gateway]
 command=/bin/bash -lc 'cd /root/.hermes && HERMES_ALLOW_ROOT_GATEWAY=1 hermes gateway run'
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/hermes-gateway.log
 stderr_logfile=/var/log/hermes-gateway.err
 EOF
-  supervisorctl reread; supervisorctl update; supervisorctl start hermes-gateway-actor 2>/dev/null || true
+  supervisorctl reread; supervisorctl update; supervisorctl start hermes-gateway 2>/dev/null || true
 }
 
 # =============================================================================
@@ -661,7 +659,7 @@ stage_onboard() {
   [ -d "$REPO/orgo/onboarding/composio-connect-mcp" ] || { echo "SKIP: onboarding kit not in repo"; return 0; }
   pip3 install --break-system-packages -r "$REPO/orgo/onboarding/composio-connect-mcp/requirements.txt" 2>/dev/null \
     || echo "VERIFY: composio-connect-mcp deps (mcp, composio)"
-  echo "NOTE: wire the composio-connect MCP into the actor profile per $REPO/orgo/onboarding/composio-connect-mcp/README.md (mcp_servers: composio-connect)."
+  echo "NOTE: wire the composio-connect MCP into the default profile per $REPO/orgo/onboarding/composio-connect-mcp/README.md (mcp_servers: composio-connect)."
   # Kickoff is fired by the orchestrator (Package A) once the box is confirmed green,
   # so it does not run as part of a bare install. Run manually with:
   echo "NOTE: start onboarding with: bash $REPO/orgo/onboarding/onboarding-kickoff.sh"
@@ -837,7 +835,7 @@ stage_connect() {
   pip3 install --break-system-packages -q flask requests pyyaml 2>/dev/null \
     || echo "VERIFY: pip flask/requests/pyyaml for safeclaw-ui"
   # Per-client service map (auth_config_id / user_id / alias). Built off-box by
-  # scripts/provision-composio.py; injected via CONNECT_SERVICES_JSON. Otherwise
+  # orgo/composio-setup-authconfigs.sh; injected via CONNECT_SERVICES_JSON. Otherwise
   # seed from the example with the slug filled (auth_config_id left to fill).
   local SVC=/opt/safeclaw/composio-services.json
   mkdir -p /opt/safeclaw
@@ -846,7 +844,7 @@ stage_connect() {
       install -m 644 "$CONNECT_SERVICES_JSON" "$SVC"
     else
       sed "s/<slug>/${PORTAL_SLUG}/g" "$REPO/safeclaw-ui/composio-services.example.json" > "$SVC"
-      echo "VERIFY: $SVC has ac_REPLACE placeholders - run scripts/provision-composio.py --client ${PORTAL_SLUG} --json and fill auth_config_id per service (or set CONNECT_SERVICES_JSON)."
+      echo "VERIFY: $SVC has ac_REPLACE placeholders - run orgo/composio-setup-authconfigs.sh for ${PORTAL_SLUG} and fill auth_config_id per service (or set CONNECT_SERVICES_JSON)."
     fi
   fi
   # Supervised connect service (loopback). COMPOSIO_API_KEY is sourced from

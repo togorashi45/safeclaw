@@ -99,7 +99,7 @@ Declare these in the box skill manifest so a fresh box pulls them: `productivity
 Beyond the runtime and channels, every box ships a small, consistent scaffolding so the agent is reliable and easy to hand off. This is the client MVP. Keep it lean.
 
 - **`SOUL.md`** (persona, covered above). The agent's stance, autonomy hard line, and prompt-injection hard line.
-- **`AGENTS.md`** (operating contract). The machine map of the box: where things live, how to behave, the hard rules. Distinct from `AI-AGENTS.md`, which is the install guide.
+- **`AGENTS.md`** (operating contract). The machine map of the box: where things live, how to behave, the hard rules.
 - **`knowledge/`** (the client's domain facts). The per-client customization surface: `client-profile.md`, `deal-criteria.md` for real-estate clients, `key-people.md`. The agent reads the one that matches the task, on demand. Facts only, no secrets. Templates in `orgo/knowledge/`.
 - **`decisions/`** (box ADR log). Why the box is configured the way it is, so nobody re-litigates or "fixes" something intentional. Seeded with the baseline calls (Postgres, single default profile, supervised brain, skill-router, draft-first). Template in `orgo/decisions/`.
 - **`evals/`** (guardrail smoke tests). A handful of behavioral checks that prove the agent's safety holds (drafts not sends, refuses prompt injection, stops before spend, ingestion works, recovers on restart) before the box goes to the client. In `orgo/evals/`.

@@ -106,8 +106,7 @@ def _basic_auth():
 SECRET_KEYS = {
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_HOME_CHANNEL"],
     "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"],
-    "gmail": ["COMPOSIO_API_KEY", "COMPOSIO_USER_ID",
-              "COMPOSIO_READER_MCP_URL", "COMPOSIO_ACTOR_MCP_URL"],
+    "gmail": ["COMPOSIO_API_KEY", "COMPOSIO_USER_ID"],
     "llm": ["OLLAMA_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
 }
 KEY_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
@@ -232,7 +231,8 @@ def api_status():
         "connected": {
             "slack": bool(env.get("SLACK_BOT_TOKEN")),
             "telegram": bool(env.get("TELEGRAM_BOT_TOKEN")),
-            "gmail": bool(env.get("COMPOSIO_ACTOR_MCP_URL")),
+            "gmail": any(s["name"].startswith(("gmail", "composio"))
+                         for s in _mcp_list()),
             "llm": bool(env.get("OLLAMA_API_KEY") or env.get("OPENAI_API_KEY")
                         or env.get("ANTHROPIC_API_KEY")),
         },
@@ -302,11 +302,11 @@ def api_telegram():
 
 # ── Gmail (Composio, multi-account) ──────────────────────────────────────────
 COMPOSIO_API = "https://backend.composio.dev/api/v3"
-# Reader = read-only; Actor = draft-only (NO send). The trust split.
-GMAIL_READER_TOOLS = ["GMAIL_FETCH_EMAILS", "GMAIL_LIST_THREADS", "GMAIL_GET_PROFILE",
-                      "GMAIL_FETCH_MESSAGE_BY_THREAD_ID", "GMAIL_GET_ATTACHMENT"]
-GMAIL_ACTOR_TOOLS = ["GMAIL_CREATE_EMAIL_DRAFT", "GMAIL_REPLY_TO_THREAD",
-                     "GMAIL_FETCH_EMAILS", "GMAIL_LIST_THREADS"]
+# Read + draft tools, NO send. Send stays out of the allowlist by construction;
+# draft behavior is additionally gated by SOUL rules on the single default profile.
+GMAIL_TOOLS = ["GMAIL_FETCH_EMAILS", "GMAIL_LIST_THREADS", "GMAIL_GET_PROFILE",
+               "GMAIL_FETCH_MESSAGE_BY_THREAD_ID", "GMAIL_GET_ATTACHMENT",
+               "GMAIL_CREATE_EMAIL_DRAFT", "GMAIL_REPLY_TO_THREAD"]
 
 
 def _composio(method, path, key, body=None):
@@ -418,10 +418,11 @@ def api_gmail_accounts():
 
 @app.post("/api/gmail/wire")
 def api_gmail_wire():
-    """Wire selected Gmail accounts. Each selected connected_account_id gets a
-    reader (read-only) MCP on the reader profile and an actor (draft) MCP on the
-    actor profile, routed by connected_account_id so multiple accounts stay
-    distinct even under one user_id."""
+    """Wire selected Gmail accounts. Each selected connected_account_id gets one
+    read+draft (no send) MCP on the single default profile, routed by
+    connected_account_id so multiple accounts stay distinct even under one
+    user_id. The canonical wiring path is the installer's stage_composio_mcp;
+    this endpoint is the dashboard fallback for adding inboxes later."""
     b = request.get_json(silent=True) or {}
     key = (b.get("key") or "").strip()
     accounts = b.get("accounts") or []  # [{ca_id, label}]
@@ -450,57 +451,50 @@ def api_gmail_wire():
         uid = ca_to_uid.get(ca, "")
         acct_acid = ca_to_acid.get(ca) or acid
         label = re.sub(r"[^a-z0-9]", "", (acct.get("label") or ca).lower())[:20] or "acct"
-        for role, tools in (("reader", GMAIL_READER_TOOLS), ("actor", GMAIL_ACTOR_TOOLS)):
-            # one client per workspace, so no client name needed in the MCP server name
-            srv = _composio("POST", "/mcp/servers", key, {
-                "name": f"safeclaw-{role}-{label}",
-                "auth_config_ids": [acct_acid], "allowed_tools": tools,
-                "managed_auth_via_composio": True,
-            })
-            url = srv.get("mcp_url") or srv.get("url")
-            if not url:  # name already exists — reuse ONLY if its auth config matches
-                lst = _composio("GET", "/mcp/servers?limit=100", key)
-                existing = next((s for s in lst.get("items", [])
-                                 if s.get("name") == f"safeclaw-{role}-{label}"), None)
-                if existing and existing.get("auth_config_ids") == [acct_acid]:
-                    url = existing.get("mcp_url")
-                elif existing:
-                    # bound to the WRONG auth config (e.g. another inbox's) —
-                    # delete and recreate. NOTE: item route is /mcp/{id}, not /mcp/servers/{id}.
-                    _composio("DELETE", f"/mcp/{existing['id']}", key)
-                    srv = _composio("POST", "/mcp/servers", key, {
-                        "name": f"safeclaw-{role}-{label}",
-                        "auth_config_ids": [acct_acid], "allowed_tools": tools,
-                        "managed_auth_via_composio": True,
-                    })
-                    url = srv.get("mcp_url") or srv.get("url")
-            if url:
-                # BOTH params required: user_id authenticates the Composio entity,
-                # connected_account_id targets the specific inbox. user_id alone
-                # is ambiguous with multiple accounts; connected_account_id ALONE
-                # is rejected by Composio at execution ("user ID does not match").
-                full = f"{url.rstrip('/')}/mcp?user_id={uid}&connected_account_id={ca}"
-                _add_gmail_mcp_to_profile(role, f"gmail_{label}", full, key)
-                wired.append({"role": role, "label": label, "ca_id": ca})
-    # reload the actor gateway so new tools register
+        srv_name = f"safeclaw-gmail-{label}"
+        # one client per workspace, so no client name needed in the MCP server name
+        srv = _composio("POST", "/mcp/servers", key, {
+            "name": srv_name,
+            "auth_config_ids": [acct_acid], "allowed_tools": GMAIL_TOOLS,
+            "managed_auth_via_composio": True,
+        })
+        url = srv.get("mcp_url") or srv.get("url")
+        if not url:  # name already exists — reuse ONLY if its auth config matches
+            lst = _composio("GET", "/mcp/servers?limit=100", key)
+            existing = next((s for s in lst.get("items", [])
+                             if s.get("name") == srv_name), None)
+            if existing and existing.get("auth_config_ids") == [acct_acid]:
+                url = existing.get("mcp_url")
+            elif existing:
+                # bound to the WRONG auth config (e.g. another inbox's) —
+                # delete and recreate. NOTE: item route is /mcp/{id}, not /mcp/servers/{id}.
+                _composio("DELETE", f"/mcp/{existing['id']}", key)
+                srv = _composio("POST", "/mcp/servers", key, {
+                    "name": srv_name,
+                    "auth_config_ids": [acct_acid], "allowed_tools": GMAIL_TOOLS,
+                    "managed_auth_via_composio": True,
+                })
+                url = srv.get("mcp_url") or srv.get("url")
+        if url:
+            # BOTH params required: user_id authenticates the Composio entity,
+            # connected_account_id targets the specific inbox. user_id alone
+            # is ambiguous with multiple accounts; connected_account_id ALONE
+            # is rejected by Composio at execution ("user ID does not match").
+            full = f"{url.rstrip('/')}/mcp?user_id={uid}&connected_account_id={ca}"
+            _add_gmail_mcp_to_config(f"gmail_{label}", full, key)
+            wired.append({"label": label, "ca_id": ca})
+    # reload the gateway so new tools register (Hermes binds MCP tools at boot)
     _run(["bash", "-lc",
-          "tmux kill-session -t gw 2>/dev/null; sleep 4; "
-          "tmux new-session -d -s gw 'export HERMES_HOME=/root/.hermes/profiles/actor "
-          "PATH=/root/.bun/bin:/tmp/node-v20.18.1-linux-x64/bin:$PATH HERMES_ALLOW_ROOT_GATEWAY=1; "
-          "exec /opt/hermes/venv/bin/hermes gateway run > /tmp/gw.log 2>&1'"], timeout=30)
+          "supervisorctl restart hermes-gateway 2>/dev/null || true"], timeout=60)
     return jsonify({"ok": True, "wired": wired})
 
 
-def _add_gmail_mcp_to_profile(role, name, url, key):
-    """Write a gmail MCP server (url + x-api-key header) into a profile's
-    config.yaml — Hermes `mcp add --url` can't attach headers, so we edit YAML."""
+def _add_gmail_mcp_to_config(name, url, key):
+    """Write a gmail MCP server (url + x-api-key header) into the default
+    profile's config.yaml — Hermes `mcp add --url` can't attach headers, so we
+    edit YAML."""
     import yaml
-    # profiles live at <hermes_home_root>/profiles/<role>; HERMES_HOME may already
-    # point at the default home, so resolve the profiles dir from its root.
-    root = HERMES_HOME
-    if root.name in ("reader", "actor") and root.parent.name == "profiles":
-        root = root.parent.parent
-    cfg_path = root / "profiles" / role / "config.yaml"
+    cfg_path = HERMES_HOME / "config.yaml"
     try:
         cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
     except Exception:
@@ -529,17 +523,10 @@ def _check(name, fn):
         return {"name": name, "ok": False, "detail": str(exc)[:300]}
 
 
-def _profiles_root() -> Path:
-    root = HERMES_HOME
-    if root.name in ("reader", "actor") and root.parent.name == "profiles":
-        root = root.parent.parent
-    return root / "profiles"
-
-
-def _gmail_mcp_servers(role: str) -> dict[str, dict]:
-    """gmail_* MCP entries from a profile's config.yaml: {name: {url, key}}."""
+def _gmail_mcp_servers() -> dict[str, dict]:
+    """gmail_* MCP entries from the default profile's config.yaml: {name: {url, key}}."""
     import yaml
-    cfg_path = _profiles_root() / role / "config.yaml"
+    cfg_path = HERMES_HOME / "config.yaml"
     if not cfg_path.exists():
         return {}
     cfg = yaml.safe_load(cfg_path.read_text()) or {}
@@ -610,32 +597,31 @@ def api_selftest():
         return True, f"all {embedded}/{chunks} chunks embedded"
     checks.append(_check("Embeddings (semantic search)", _embeddings_check))
 
-    def _profiles_check():
-        missing = [r for r in ("reader", "actor")
-                   if not (_profiles_root() / r / "config.yaml").exists()]
-        return (not missing, "reader + actor configured" if not missing
-                else f"missing profile(s): {', '.join(missing)}")
-    checks.append(_check("Trust-split profiles", _profiles_check))
+    def _profile_check():
+        cfg = HERMES_HOME / "config.yaml"
+        return (cfg.exists(), "default profile configured" if cfg.exists()
+                else f"missing {cfg}")
+    checks.append(_check("Hermes profile", _profile_check))
 
-    # Gmail: a REAL tools/call per wired account on the actor profile (this is
+    # Gmail: a REAL tools/call per wired account on the default profile (this is
     # the call that fails when the MCP URL/auth is mis-wired).
-    actor_gmail = _gmail_mcp_servers("actor")
-    if not actor_gmail:
+    gmail_servers = _gmail_mcp_servers()
+    if not gmail_servers:
         checks.append({"name": "Gmail (Composio)", "ok": False,
                        "detail": "no Gmail accounts wired yet — use the Gmail panel"})
-    for name, spec in actor_gmail.items():
-        # FETCH_EMAILS is in both the reader and actor allowlists — a real fetch
-        # is the truest "Gmail works" signal (auth + account routing + tool perms).
+    for name, spec in gmail_servers.items():
+        # A real fetch is the truest "Gmail works" signal (auth + account
+        # routing + tool perms).
         checks.append(_check(f"Gmail · {name}", lambda s=spec: _mcp_call(
             s["url"], s["key"], "GMAIL_FETCH_EMAILS", {"max_results": 1})))
 
     def _telegram_check():
         rc, _ = _run(["pgrep", "-f", "hermes gateway run"], timeout=10)
-        actor_env = _profiles_root() / "actor" / ".env"
-        has_token = actor_env.exists() and "TELEGRAM_BOT_TOKEN=" in actor_env.read_text() \
-            and not re.search(r"TELEGRAM_BOT_TOKEN=\s*$", actor_env.read_text(), re.M)
+        env_file = HERMES_HOME / ".env"
+        has_token = env_file.exists() and "TELEGRAM_BOT_TOKEN=" in env_file.read_text() \
+            and not re.search(r"TELEGRAM_BOT_TOKEN=\s*$", env_file.read_text(), re.M)
         if not has_token:
-            return False, "no bot token in actor profile — use the Telegram panel"
+            return False, "no bot token in the default profile — use the Telegram panel"
         return rc == 0, "gateway running, bot token set" if rc == 0 \
             else "bot token set but gateway NOT running"
     checks.append(_check("Telegram agent", _telegram_check))

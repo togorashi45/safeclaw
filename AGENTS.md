@@ -1,19 +1,19 @@
 # AGENTS.md, SafeClaw box operating contract
 
-Machine-readable contract for the Hermes agent running on a client SafeClaw box. This is the operating map. `AI-AGENTS.md` is the human/agent INSTALL guide (different file, different job). The persona lives in `SOUL.md`.
+Machine-readable contract for the Hermes agent running on a client box. This is the operating map. The persona lives in `SOUL.md`.
 
 ## What this box is
 A self-contained SafeClaw deployment for ONE client (Hermes runtime + gBrain memory on local Postgres). It serves that client through their channel (WhatsApp, Telegram, or Slack) and keeps their brain current from their own data. It is not shared with other clients.
 
 ## Where things live (on the box)
 - `SOUL.md` (at `~/.hermes/SOUL.md`), the agent persona: stance, autonomy hard line, prompt-injection hard lines. Loaded fresh every message.
-- `~/.hermes/profiles/actor/config.yaml`, the one gateway profile + its MCP servers.
+- `~/.hermes/config.yaml`, the single default profile + its MCP servers. There is one profile and one gateway per box.
 - `/opt/brain`, the Postgres-backed gBrain (pages under `/opt/brain/repo`). Supervised as `postgres-brain` + `safeclaw-brain`.
 - `skills/`, the skill packs. Loaded on demand through the skill-router metaskill (do not preload all of them).
 - `knowledge/`, the client's domain facts the agent reads on demand (profile, deal criteria, key people, brand voice). This is the per-client customization surface.
 - `decisions/`, why the box is configured the way it is.
 - `evals/`, the guardrail smoke tests that prove the agent's safety holds.
-- Ingestion routines on cron under `~/.hermes/profiles/actor/scripts/` (email, calendar, GHL).
+- Ingestion routines on cron under `~/.hermes/scripts/` (email, calendar, GHL).
 
 ## How to behave (hard rules, from SOUL.md)
 - **Draft, do not send, outbound communication to the client's contacts** unless the client has explicitly turned on auto-send. Default is draft only.

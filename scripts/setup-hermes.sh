@@ -67,8 +67,7 @@ pip3 install --break-system-packages croniter
 # in the DEFAULT config. Setting model.provider=ollama does NOT change it, and the
 # provider resolver then demands an OPENROUTER_API_KEY for chat. Repoint the
 # DEFAULT profile's base_url at Ollama Cloud here so the default --tui gateway
-# works; reader/actor profiles are repointed in Step 3 (they copy from default,
-# but we set them explicitly there too). Best-effort — never abort the install.
+# works. Best-effort — never abort the install.
 HERMES_HOME="${HERMES_HOME:-/root/.hermes}" hermes config set model.base_url https://ollama.com/v1 2>/dev/null \
   && echo "[setup-hermes] default model.base_url -> https://ollama.com/v1" \
   || echo "[setup-hermes] WARN: could not preset model.base_url (set it in Step 1/3)"

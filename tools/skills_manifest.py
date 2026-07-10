@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """skills_manifest.py - build a lean, profile-driven skill directory for Hermes.
 
-This is the SafeClaw metaskill loader. It replaces the hardcoded delete list in
-docker/prune-skills.sh with a config-driven system so each box (reader, actor,
+This is the metaskill loader: a config-driven system so each box (base profile
 or a specific team member) ships ONLY the skills it needs, and so the agent gets
 one always-loaded directory of those skills instead of every SKILL.md body.
 
@@ -32,7 +31,7 @@ Usage:
   python3 tools/skills_manifest.py --profile base --skills-dir skills --out build/skills
 
   # At image-build time, point it at the full bundled tree:
-  python3 tools/skills_manifest.py --profile reader --skills-dir /opt/hermes/skills --out /opt/hermes/.skill-manifest
+  python3 tools/skills_manifest.py --profile team-member --skills-dir /opt/hermes/skills --out /opt/hermes/.skill-manifest
 
 Exit codes: 0 ok, 2 bad profile, 3 no skills found.
 """
@@ -97,8 +96,8 @@ def skill_record(skill_md_path: str, skills_root: str) -> dict | None:
 
     description = (fm.get("description") or "").strip()
     requires = hermes.get("requires_toolsets") or fm.get("requires_toolsets") or []
-    # Trust boundary: reader vs actor vs either. Authors can declare it; we also
-    # sniff the body's "Reader" / "Actor" boundary note as a fallback.
+    # Legacy trust-boundary metadata; carried through for skill authors that
+    # declare it, but no longer enforced (single default profile).
     boundary = (hermes.get("boundary") or fm.get("boundary") or "").lower() or None
 
     return {
@@ -232,9 +231,7 @@ def render_index(kept: list[dict], profile_name: str) -> str:
         "2. Read that skill's SKILL.md, then follow it. Read its referenced files ",
         "   only when the body points to them.",
         "3. If two skills could match, read both and pick the more specific one.",
-        "4. Respect trust boundaries: a `[reader]` skill must not be run by the Actor ",
-        "   and vice versa.",
-        "5. If nothing matches, say so and ask, do not guess.",
+        "4. If nothing matches, say so and ask, do not guess.",
         "",
     ]
     return "\n".join(lines)

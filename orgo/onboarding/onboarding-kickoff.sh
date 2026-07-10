@@ -21,7 +21,7 @@ bash /opt/safeclaw/orgo/routines/teach-followup.sh register || echo "VERIFY: tea
 
 # Kick the agent into onboarding mode and send the opening message.
 PROMPT="You are now in ONBOARDING MODE. Load and follow ONBOARDING-PLAYBOOK.md ($PLAYBOOK). Send the opening message to the principal over WhatsApp and begin Section A. One question at a time. Track state in the brain page onboarding/progress."
-if hermes agent run --profile actor --prompt "$PROMPT" 2>/dev/null; then
+if hermes agent run --prompt "$PROMPT" 2>/dev/null; then
   echo "onboarding kicked off (agent sent opening message)"
 else
   echo "VERIFY: hermes agent invocation. Falling back to a pending instruction."

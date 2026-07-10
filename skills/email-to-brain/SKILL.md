@@ -26,9 +26,8 @@ reads Gmail and writes summary pages to the brain. It never sends or drafts.
 
 ## Prerequisites
 
-- A Gmail connection on the Reader (Connections tab, Gmail, Reader).
-- gbrain reachable. The reader profile should carry **only** Gmail and gbrain
-  (see pitfalls).
+- A Gmail connection (Composio MCP wired into the default profile).
+- gbrain reachable.
 
 ## Quick reference
 

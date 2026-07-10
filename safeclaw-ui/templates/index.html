@@ -341,7 +341,7 @@ async function wireGmail(btn){const key=$('#gm-key').value.trim();
   if(!accounts.length)return toast('Select at least one account',false);
   btn.disabled=true;btn.textContent='Wiring…';
   try{const r=await api('/api/gmail/wire',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,accounts})});
-    toast('Wired '+r.wired.length+' MCP(s) — reloading actor');}
+    toast('Wired '+r.wired.length+' MCP(s) - reloading gateway');}
   catch(e){toast(e.message,false);}finally{btn.disabled=false;btn.textContent='Wire selected accounts';}}
 const saveGdrive=b=>post('/api/gdrive',{GDRIVE_SERVICE_ACCOUNT_JSON:$('#gd-json').value},b);
 async function addMcp(btn){btn.disabled=true;try{await api('/api/mcp',{method:'POST',headers:{'content-type':'application/json'},
