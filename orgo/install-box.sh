@@ -360,7 +360,19 @@ stage_repo() {
   if [ ! -d "$REPO/.git" ]; then
     git clone -b "$SAFECLAW_REF" "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/safeclaw.git" "$REPO"
   else
-    ( cd "$REPO" && git fetch --all -q && git checkout "$SAFECLAW_REF" -q && git pull -q )
+    # Existing clone (e.g. a legacy-generation box): force it to the requested ref.
+    # A prior generation can leave a dirty worktree (validated live 2026-07-10 on the
+    # Atomic Stays rebuild: modified docker/ files aborted the checkout), and the
+    # remote may be tokenless. Set the tokened remote, then checkout -f + hard reset
+    # so the update path is as deterministic as a fresh clone.
+    (
+      cd "$REPO" || exit 1
+      git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/safeclaw.git"
+      git fetch origin "$SAFECLAW_REF" -q || exit 1
+      git checkout -f "$SAFECLAW_REF" -q 2>/dev/null \
+        || git checkout -fb "$SAFECLAW_REF" FETCH_HEAD -q || exit 1
+      git reset --hard "origin/$SAFECLAW_REF" -q 2>/dev/null || git reset --hard FETCH_HEAD -q
+    ) || echo "VERIFY: stage_repo update path (fetch/checkout/reset of $SAFECLAW_REF)"
   fi
   pip3 install --break-system-packages flask pyyaml requests croniter
 }
