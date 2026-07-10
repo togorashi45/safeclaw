@@ -33,4 +33,4 @@ Nothing in the runtime is forked. All customization is config, skills, routines,
 
 ## History note
 
-This tree previously carried two retired generations (a Docker/VPS stack and a two-profile reader/actor trust split). Both were removed 2026-07-10 on the `v2-hermes-brain` branch. If a doc or script mentions reader/actor profiles or docker-compose, it is stale; the installer wins.
+This repo is `togorashi45/hermes-brain`, forked 2026-07-10 from the retired `safeclaw` tree after removing two dead generations (a Docker/VPS stack and a two-profile reader/actor trust split). The old safeclaw repo is abandoned; do not pull from it. On-box paths keep the `/opt/safeclaw` prefix for compatibility (the portal and skill tooling reference them). If a doc or script mentions reader/actor profiles or docker-compose, it is stale; the installer wins. The installer was validated end to end on a live box 2026-07-10.

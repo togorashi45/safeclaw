@@ -32,7 +32,7 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 # ---- required config (from install.env) ------------------------------------
 : "${CLIENT_SLUG:?set CLIENT_SLUG (e.g. kim)}"
 : "${SKILL_PROFILE:=team-member}"          # e.g. team-kim, base
-: "${SAFECLAW_REF:=golden-template}"       # branch/tag to install
+: "${SAFECLAW_REF:=main}"                  # branch/tag of togorashi45/hermes-brain to install
 : "${HERMES_MODEL:=glm-4.7}"
 : "${HERMES_BASE_URL:=https://ollama.com/v1}"
 # Secrets (leave blank to skip the dependent stage; the stage will warn):
@@ -358,7 +358,7 @@ stage_repo() {
   say "STAGE repo: clone safeclaw -> $REPO ($SAFECLAW_REF)"
   if [ -z "$GITHUB_TOKEN" ]; then echo "SKIP: no GITHUB_TOKEN (private repo). Provide it or push the repo manually."; return 0; fi
   if [ ! -d "$REPO/.git" ]; then
-    git clone -b "$SAFECLAW_REF" "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/safeclaw.git" "$REPO"
+    git clone -b "$SAFECLAW_REF" "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/hermes-brain.git" "$REPO"
   else
     # Existing clone (e.g. a legacy-generation box): force it to the requested ref.
     # A prior generation can leave a dirty worktree (validated live 2026-07-10 on the
@@ -367,7 +367,7 @@ stage_repo() {
     # so the update path is as deterministic as a fresh clone.
     (
       cd "$REPO" || exit 1
-      git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/safeclaw.git"
+      git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/togorashi45/hermes-brain.git"
       git fetch origin "$SAFECLAW_REF" -q || exit 1
       git checkout -f "$SAFECLAW_REF" -q 2>/dev/null \
         || git checkout -fb "$SAFECLAW_REF" FETCH_HEAD -q || exit 1

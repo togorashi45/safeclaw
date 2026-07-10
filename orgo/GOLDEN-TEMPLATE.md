@@ -1,6 +1,6 @@
 # Golden Template (Hermes + 2nd Brain client box)
 
-**Branch:** `v2-hermes-brain` · **Owner:** Jake McKinney (RE Reset)
+**Repo:** `togorashi45/hermes-brain` (branch `main`) · **Owner:** Jake McKinney (RE Reset) · Lineage: forked from the retired `safeclaw` tree 2026-07-10, validated live on the Atomic Stays box the same day.
 
 This is the canonical client box build: **standard, up-to-date Hermes + standard gBrain**, with our layers on top: the client portal, the PARA + OKF knowledge method, and our customization of cron routines, skills, and the agent SOUL. Nothing in the runtime is forked. Every concrete artifact referenced here lives in this repo; per-client secrets never do (they go in `install.env` on the box, which is never committed).
 
