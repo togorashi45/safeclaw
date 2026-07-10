@@ -712,8 +712,18 @@ stage_verify() {
 stage_onboard() {
   say "STAGE onboard: wire connect MCP + start agent-driven onboarding"
   [ -d "$REPO/orgo/onboarding/composio-connect-mcp" ] || { echo "SKIP: onboarding kit not in repo"; return 0; }
-  pip3 install --break-system-packages -r "$REPO/orgo/onboarding/composio-connect-mcp/requirements.txt" 2>/dev/null \
-    || echo "VERIFY: composio-connect-mcp deps (mcp, composio)"
+  # Install the connect MCP deps into the HERMES venv (where the MCP runs), not
+  # system pip: debian's typing_extensions blocks 'mcp' system-wide, and the venv
+  # is uv-managed with no pip module (both validated live 2026-07-10). uv lives
+  # at /root/.local/bin after setup-hermes.sh.
+  if PATH=/root/.local/bin:$PATH command -v uv >/dev/null 2>&1 && [ -x /opt/hermes/venv/bin/python3 ]; then
+    PATH=/root/.local/bin:$PATH uv pip install --python /opt/hermes/venv/bin/python3 -q \
+      -r "$REPO/orgo/onboarding/composio-connect-mcp/requirements.txt" \
+      || echo "VERIFY: composio-connect-mcp deps into the hermes venv (uv)"
+  else
+    pip3 install --break-system-packages -r "$REPO/orgo/onboarding/composio-connect-mcp/requirements.txt" 2>/dev/null \
+      || echo "VERIFY: composio-connect-mcp deps (mcp, composio)"
+  fi
   echo "NOTE: wire the composio-connect MCP into the default profile per $REPO/orgo/onboarding/composio-connect-mcp/README.md (mcp_servers: composio-connect)."
   # Kickoff is fired by the orchestrator (Package A) once the box is confirmed green,
   # so it does not run as part of a bare install. Run manually with:
