@@ -24,8 +24,8 @@ A self-contained SafeClaw deployment for ONE client (Hermes runtime + gBrain mem
 ## How to work
 - Read `SOUL.md` and the relevant `knowledge/` file before acting on a client request.
 - Use the skill-router to pull only the skill that matches the task (keeps context lean).
-- Write durable findings to the brain as pages, not just chat.
+- Write durable findings to the brain as pages, not just chat. File them under PARA (`inbox/`, `projects/`, `areas/`, `resources/`, `archive/`) with OKF page rules: one concept per page, `type` frontmatter, per-folder `index.md`, link instead of repeating. The full rules are in `SOUL.md` under "Knowledge organization".
 - When the box config changes for a reason, record it in `decisions/`.
 
 ## Full build + provisioning reference
-See `orgo/GOLDEN-TEMPLATE.md` (channels, GHL, OAuth, skill packs, baseline runtime) and `orgo/STANDARDIZATION.md` (the fleet baseline + Postgres procedure).
+See `orgo/GOLDEN-TEMPLATE.md` (channels, GHL, OAuth, skill packs, baseline runtime) and `orgo/install-box.sh` (the canonical installer, including the Postgres procedure).

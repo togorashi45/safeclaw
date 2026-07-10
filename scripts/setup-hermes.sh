@@ -4,7 +4,7 @@
 # pre-build of the dashboard web bundle for Hermes 0.11.
 #
 # This is the single load-bearing install of Hermes itself for the orgo native
-# (no-Docker) stack. Run it from Step 1 of ORGO-CLIENT-TEMPLATE.md. Everything
+# (no-Docker) stack. Run by install-box.sh stage_runtime. Everything
 # downstream (profiles, gateway, dashboard, dream cron, Console /api/chat)
 # depends on `which hermes` resolving after this script completes.
 #

@@ -37,7 +37,7 @@ cloudflared tunnel create safeclaw-acme           # prints a UUID + token
 #    DASHBOARD_AUTH_PASSWORD_HASH=$(caddy hash-password --plaintext '<pw>')
 ```
 
-## Start (on the box — provision-client.py does this)
+## Start (on the box, handled by the installer)
 
 ```bash
 set -a; . orgo/client.env; set +a

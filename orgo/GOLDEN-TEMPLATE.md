@@ -1,10 +1,10 @@
-# SafeClaw Golden Template (most-complete build)
+# Golden Template (Hermes + 2nd Brain client box)
 
-**Branch:** `golden-template` · **Consolidated:** 2026-06-14 · **Owner:** Jake McKinney (RE Reset)
+**Branch:** `v2-hermes-brain` · **Owner:** Jake McKinney (RE Reset)
 
-This is the canonical, most-complete SafeClaw. It consolidates the best integration from every live client box into one clean template so a new client box can be stood up with the full capability set. Every concrete artifact referenced here lives in this repo; per-client secrets never do (they go in `client.env`, which is gitignored).
+This is the canonical client box build: **standard, up-to-date Hermes + standard gBrain**, with our layers on top: the client portal, the PARA + OKF knowledge method, and our customization of cron routines, skills, and the agent SOUL. Nothing in the runtime is forked. Every concrete artifact referenced here lives in this repo; per-client secrets never do (they go in `install.env` on the box, which is never committed).
 
-Pairs with `orgo/STANDARDIZATION.md` (the fleet baseline). **Provision a box with `orgo/install-box.sh`** (the canonical from-scratch installer; it supersedes `provision-client.py` and the manual `ORGO-CLIENT-TEMPLATE.md`), then layer the channels and skill packs below. Boxes run a **single default Hermes profile** (the actor/reader split was retired 2026-06-19).
+**Provision a box with `orgo/install-box.sh`** (the canonical from-scratch installer), then layer the channels and skill packs below. Boxes run a **single default Hermes profile**. The old two-agent actor/reader architecture and the Docker generation are gone from this tree entirely (removed 2026-07-10; retired as an architecture 2026-06-19).
 
 ---
 
@@ -15,9 +15,7 @@ Every box runs this exact shape. Proven across Matt, Travis, Elise, Phil.
 - **Brain:** gBrain `0.42.42.0` on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` + `safeclaw-brain`. Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim).
 - **Gateway:** exactly one supervised gateway program running `hermes gateway run` on the **single default profile**. No actor/reader split (collapsed 2026-06-19): one profile holds the model, MCP servers, channel tokens, cron jobs, and the ingest scripts. The default profile is the only gateway that runs, so it is the only scheduler that ticks.
 - **Console / tunnel / dashboard:** SafeClaw UI on `:8899`, cloudflared named tunnel, Hermes dashboard on `:9119`, kept alive by the tmux `watchdog`. The watchdog never manages the brain (that is supervised) to avoid the dual-writer corruption that killed PGlite.
-- **Provisioning gotcha:** the brain role needs `CREATE ROLE brain LOGIN SUPERUSER BYPASSRLS` (superuser alone does not set `rolbypassrls`, and gBrain's v24 migration halts without it).
-
-Full detail and the repeatable Postgres procedure are in `orgo/STANDARDIZATION.md`.
+- **Provisioning gotcha:** the brain role needs `CREATE ROLE brain LOGIN SUPERUSER BYPASSRLS` (superuser alone does not set `rolbypassrls`, and gBrain's v24 migration halts without it). The repeatable procedure is `stage_brain_db` in `install-box.sh`.
 
 ---
 
@@ -74,8 +72,8 @@ Two parts, both in this repo.
 ## Google / Composio OAuth (all boxes)
 
 OAuth for Gmail, Calendar, Docs, Sheets, and Tasks runs through **Composio**, one scoped workspace/key per client (keys are not interchangeable across boxes).
-- Env: `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID`, and the Composio MCP URL(s) in `client.env`. They are wired into the single default profile config.
-- **Self-service connect:** the `onboarding/` Flask app (Victor-style OAuth onboarding) is where a client clicks to authorize each provider; per-account ids are appended to the Hermes config from the Connections registry.
+- Env: `COMPOSIO_API_KEY` + `COMPOSIO_USER_ID` in `install.env`. The per-box Composio MCP server is provisioned by `stage_composio_mcp` (`orgo/composio-provision-mcp.mjs`) and wired into the single default profile config.
+- **Self-service connect:** the on-box connect page (`safeclaw-ui`, `stage_connect`, `:8899`) is where a client clicks to authorize each provider; the `composio-connect-mcp` (in `orgo/onboarding/`) gives the agent the same power during the onboarding interview.
 - **Native ingestion routines (deployed + scheduled by `stage_cron`):**
   - `orgo/routines/email-ingest-cron.sh` (wraps `email-ingest.sh`) into the brain (hourly). Playbook `skills/email-to-brain`.
   - `orgo/routines/calendar-collect.py` + `calendar-sync.sh` into the brain (daily). Playbook `skills/calendar-to-brain`.
@@ -101,6 +99,7 @@ Beyond the runtime and channels, every box ships a small, consistent scaffolding
 - **`SOUL.md`** (persona, covered above). The agent's stance, autonomy hard line, and prompt-injection hard line.
 - **`AGENTS.md`** (operating contract). The machine map of the box: where things live, how to behave, the hard rules.
 - **`knowledge/`** (the client's domain facts). The per-client customization surface: `client-profile.md`, `deal-criteria.md` for real-estate clients, `key-people.md`. The agent reads the one that matches the task, on demand. Facts only, no secrets. Templates in `orgo/knowledge/`.
+- **PARA + OKF brain organization.** The brain repo (`/opt/brain/repo`) is seeded at `stage_brain_init` with the PARA skeleton from `orgo/knowledge/para-seed/`: `inbox/`, `projects/`, `areas/`, `resources/`, `archive/`, each with an OKF index page. The agent's filing rules (one concept per page, `type` frontmatter, per-folder index, link instead of repeat) live in the SOUL template's "Knowledge organization" section. A weekly `gbrain-hygiene` cron (rule-based, zero LLM) reports doctor findings, orphans, and contradictions to `areas/brain-hygiene/latest.md`, complementing the nightly LLM dream.
 - **`decisions/`** (box ADR log). Why the box is configured the way it is, so nobody re-litigates or "fixes" something intentional. Seeded with the baseline calls (Postgres, single default profile, supervised brain, skill-router, draft-first). Template in `orgo/decisions/`.
 - **`evals/`** (guardrail smoke tests). A handful of behavioral checks that prove the agent's safety holds (drafts not sends, refuses prompt injection, stops before spend, ingestion works, recovers on restart) before the box goes to the client. In `orgo/evals/`.
 - **Skill loading** (skill-router metaskill, separate branch). Skills load on demand, not preloaded, so context stays lean.
@@ -111,12 +110,12 @@ What the MVP deliberately leaves out: a full automated eval harness, CI, and hea
 
 ## Provisioning order (new client box)
 
-1. `orgo/install-box.sh` (canonical installer) -> base box, Postgres brain, gateway (single default profile), cron routines, channels, portal (per its stages). `INSTALL-CHECKLIST.md` is the verify pass.
-2. Fill `client.env` from `client.env.example` (identity, brain, LLM, Composio, channels, GHL if applicable).
+1. `orgo/install-box.sh` (canonical installer) -> base box, Postgres brain (PARA-seeded), gateway (single default profile), cron routines, channels, portal, connect page (per its stages). `stage_health` + `stage_verify` are the verify pass.
+2. Fill `/opt/install.env` (identity, brain, LLM, Composio, channels, GHL if applicable; the required vars are declared at the top of `install-box.sh`, example at `orgo/install.env.admin.example`).
 3. Deploy the agent persona: fill `orgo/SOUL.template.md` for the client, strip the comment header, save it on the box as `~/.hermes/SOUL.md`.
 4. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).
 5. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
-6. Ingestion routines are deployed + scheduled on the default profile by `stage_cron`: `email-ingest` (hourly), `calendar-sync` (daily), `gbrain-dream` (daily), and `ghl-sync` (hourly, when `ENABLE_GHL_SYNC=1`) for CRM clients.
+6. Ingestion routines are deployed + scheduled on the default profile by `stage_cron`: `email-ingest` (hourly), `calendar-sync` (daily), `gbrain-dream` (daily), `gbrain-hygiene` (weekly), and `ghl-sync` (hourly, when `ENABLE_GHL_SYNC=1`) for CRM clients.
 7. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
 8. Fill the box scaffolding: `AGENTS.md` (as-is), `knowledge/` (from the templates, per client), `decisions/` (add any per-box notes). Run `evals/guardrails.md` against the agent before handing the box to the client.
 

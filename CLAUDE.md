@@ -1,25 +1,36 @@
-# CLAUDE.md — ai-assistant (SafeClaw)
+# CLAUDE.md
 
-This repo is **SafeClaw** (github `Vasanth19/safeclaw`): a security-hardened, single-user AI email assistant — **Hermes** trust-split agents (reader/actor) wired to a **GBrain**-powered brain. Trust split is enforced at the Composio MCP layer (reader can't send, actor can't see raw email). See `ARCHITECTURE.md`.
+Guidance for Claude Code working in this repository.
 
-## 🚧 Active work — Suffolk deployment (READ THIS FIRST)
+## What this repo is
 
-There is a **deployment in progress** to the first client's production VPS (Suffolk). A new agent MUST start by reading the running guide so you know **what's done and where to pick up**:
+The **golden template** for RE Reset client agent boxes. The product is **Hermes + 2nd Brain**: standard, up-to-date Hermes (Nous Research) plus standard gBrain on local Postgres 16 + pgvector, with our layers on top:
 
-➡️ **`SUFFOLK-DEPLOYMENT-GUIDE.md`** — running document. Read its **"CURRENT STATUS — START HERE"** block first. **Keep it updated** (status block + update log) every time the deploy moves or you discover a new nuance.
+- The client portal (cloned from `rereset-portal` at install)
+- The PARA + OKF knowledge method (brain repo seeded from `orgo/knowledge/para-seed/`, rules in the SOUL template)
+- Our cron routines (`orgo/routines/`), skill packs (`skills/`), and the agent SOUL (`orgo/SOUL.template.md`)
 
-Key facts for any agent touching this:
-- The GBrain swap is **merged to `main`** (PR #1, merged 2026-05-26). **New client deployments track `main`** (see `CLIENT-DEPLOYMENT-PLAYBOOK.md`). The `feat/safeclaw-brain-gbrain` branch is **deliberately kept open** for in-flight Suffolk fixes and is *not* deleted. **Suffolk is the exception:** its VPS clone at `/opt/safeclaw` still tracks `feat/safeclaw-brain-gbrain` — **do not re-point Suffolk to `main`** while moving parts remain.
-- **🚨 PRIME DIRECTIVE:** the Suffolk box also runs the client's **LIVE "Brookhaven Solds" app** (nginx 80/443, uvicorn `:8001`, postgres `:5432`). **Never disturb it.** All SafeClaw additions are isolated (port 8443 + internal docker net). Verify Brookhaven `/health` after any VPS change.
-- Secrets live in **`suffolk.env`** (gitignored) — never commit secrets; never paste them into committed docs.
-- Deployment knowledge is also mirrored in brain-personal (`projects/safeclaw/suffolk-deployment`) and `.claude/knowledge/decisions/suffolk-deployment-tracker.md`.
+Nothing in the runtime is forked. All customization is config, skills, routines, and prompts.
 
-## Related docs
-- `SUFFOLK-DEPLOYMENT-GUIDE.md` — the running deploy guide (primary)
-- `CLIENT-DEPLOYMENT-PLAYBOOK.md` — **distilled gotchas + pre-flight checklist for FUTURE client deploys** (read before deploying to any new client box, so we don't re-hit the Suffolk traps)
-- `SUFFOLK-DEPLOY-PLAN.md` — the detailed step-by-step deploy runbook
-- `ARCHITECTURE.md` — system architecture (trust split, tiers, brain)
-- `DEPLOY-RUNBOOK.md`, `INSTALL.md`, `FIRST-RUN.md`, `HOSTINGER-DEPLOY.md` — general deploy docs
+## The canonical artifacts
+
+- `orgo/install-box.sh` - THE installer. Idempotent, staged, non-Docker. Reads `/opt/install.env` on the box. Run everything: `sudo bash /opt/install-box.sh`, or selected stages: `... base brain_db`.
+- `orgo/GOLDEN-TEMPLATE.md` - the build spec. Read it first.
+- `orgo/SOUL.template.md` - the agent persona template, filled per client by `orgo/fill-soul.py` (off-box).
+- `AGENTS.md` - the operating contract loaded by the agent on the box.
+
+## Hard rules
+
+- **Single default Hermes profile.** One gateway (`hermes-gateway` under supervisor), one config at `/root/.hermes/`. The two-agent actor/reader architecture is dead; do not reintroduce it.
+- **No Docker, no PGlite.** The brain is supervised native Postgres + pgvector.
+- **Never fork Hermes or gBrain.** Install stock, customize via config/skills/SOUL.
+- **Secrets never in git.** Per-box secrets live in `/opt/install.env` and `/opt/brain/.env` on the box (chmod 600).
+- **No em or en dashes in any client-facing prose**, including SOUL files (`fill-soul.py` hard-fails on them).
 
 ## Quality checks
-`docker compose --env-file .env.example config` to validate compose; `bash -n` / `python3 -m py_compile` for scripts; `bash scripts/smoke-brain.sh` for brain retrieval.
+
+`bash -n orgo/install-box.sh` for the installer; `python3 -m py_compile` for Python; keep every stage idempotent (safe to re-run on a live box).
+
+## History note
+
+This tree previously carried two retired generations (a Docker/VPS stack and a two-profile reader/actor trust split). Both were removed 2026-07-10 on the `v2-hermes-brain` branch. If a doc or script mentions reader/actor profiles or docker-compose, it is stale; the installer wins.

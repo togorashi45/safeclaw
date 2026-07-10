@@ -6,10 +6,9 @@
 # green SafeClaw agent box from scratch, every time, with no baked snapshot and
 # no client secrets baked in (secrets are injected per box via install.env).
 #
-# Supersedes the older PGLite + Docker path in provision-client.py. It encodes
-# the 2026-06 fleet hardening (Postgres + pgvector brain under supervisor,
-# OpenRouter embeddings, consolidated gateway) plus the documented install
-# gotchas from ORGO-CLIENT-TEMPLATE.md / INSTALL-CHECKLIST.md.
+# It encodes the 2026-06 fleet hardening (Postgres + pgvector brain under
+# supervisor, OpenRouter embeddings, one gateway on the single default profile)
+# plus every documented install gotcha from the retired manual runbooks.
 #
 # RUN: push this file + a filled install.env to the box, then:
 #        sudo bash /opt/install-box.sh            # full run
@@ -379,7 +378,7 @@ stage_runtime() {
   [ -x /root/.bun/bin/bun ] && ln -sf /root/.bun/bin/bun /usr/local/bin/bun
   # gbrain: cloned + built from source (github.com/garrytan/gbrain), then symlinked
   # globally. There is NO vendored install script; this is the canonical method from
-  # ORGO-CLIENT-TEMPLATE.md Step 1 (the old orgo/setup/install-gbrain.sh path never existed).
+  # (the old orgo/setup/install-gbrain.sh path never existed; build from source)
   if ! have gbrain; then
     [ -d /opt/gbrain-src/.git ] || git clone https://github.com/garrytan/gbrain.git /opt/gbrain-src
     ( cd /opt/gbrain-src && bun install && bun link )
@@ -402,7 +401,20 @@ stage_brain_init() {
   gbrain init --url "$GBRAIN_DATABASE_URL" --embedding-model "$GBRAIN_EMBED_MODEL" \
     || echo "VERIFY: gbrain init flags for the Postgres path"
   gbrain config set sync.repo_path "$BRAIN/repo" 2>/dev/null || true
+  # PARA + OKF skeleton: the brain repo is organized from day one (inbox /
+  # projects / areas / resources / archive, each with an OKF index page). The
+  # agent's filing rules live in SOUL.md; these pages are the structure they
+  # point at. Never overwrite an existing page (idempotent re-run).
+  if [ -d "$REPO/orgo/knowledge/para-seed" ]; then
+    ( cd "$REPO/orgo/knowledge/para-seed" && find . -name '*.md' -print0 ) | \
+    while IFS= read -r -d '' f; do
+      dst="$BRAIN/repo/${f#./}"
+      [ -f "$dst" ] || install -D -m 644 "$REPO/orgo/knowledge/para-seed/${f#./}" "$dst"
+    done
+    echo "brain repo seeded with the PARA skeleton (inbox/projects/areas/resources/archive)."
+  fi
   ( cd "$BRAIN/repo" && git add -A && git commit -q -m "initial seed" 2>/dev/null || true )
+  gbrain sync 2>/dev/null || true   # index the seed pages; harmless if the subcommand differs
 }
 
 # =============================================================================
@@ -587,7 +599,7 @@ stage_cron() {
   mkdir -p "$SD" "$BS"
 
   # 1. shell routines -> default scripts dir (cron resolves --script relative to $HERMES_HOME/scripts)
-  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh gbrain-dream.sh; do
+  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh gbrain-dream.sh gbrain-hygiene.sh; do
     [ -f "$R/$s" ] && install -m 755 "$R/$s" "$SD/$s"
   done
   # 2. deterministic python collectors -> /opt/brain/scripts (what calendar-sync/ghl-sync call)
@@ -618,6 +630,10 @@ stage_cron() {
   else
     echo "NOTE: OPENROUTER_API_KEY unset; skipping gbrain-dream (dream needs it)."
   fi
+  # gbrain-hygiene: weekly rule-based brain checks (doctor, orphans,
+  # contradictions), zero LLM cost; writes areas/brain-hygiene/latest.md.
+  hermes cron create "0 13 * * 1" --name gbrain-hygiene --script gbrain-hygiene.sh --no-agent --deliver local 2>&1 | tail -1 \
+    || echo "VERIFY: hermes cron create gbrain-hygiene"
   echo "cron jobs registered (default profile):"; hermes cron list 2>/dev/null | grep -E "Name:|Next run:" || true
 }
 
