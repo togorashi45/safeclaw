@@ -50,7 +50,7 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 # COMPOSIO_API_KEY is set; GHL sync is opt-in (clients on GoHighLevel only):
 : "${ENABLE_GHL_SYNC:=}"                     # set to 1 to schedule the hourly GHL -> gbrain sync
 # Portal (the per-box client portal, served natively against this box's Postgres):
-: "${PORTAL_REF:=feat/portal-per-box-template}"  # branch/tag of togorashi45/rereset-portal to install
+: "${PORTAL_REF:=main}"  # branch/tag of togorashi45/rereset-portal to install
 : "${PORTAL_SLUG:=${CLIENT_SLUG}}"          # the /c/<slug> + brief clientSlug (e.g. phil-gore)
 : "${PORTAL_ALLOWLIST:=}"                    # the client's own login emails (comma-separated), gates /c
 : "${PORTAL_DOMAIN:=portal-${PORTAL_SLUG}.rereset.ai}"  # public hostname (needs a Cloudflare CNAME to the tunnel)
