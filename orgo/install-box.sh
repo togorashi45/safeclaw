@@ -406,7 +406,22 @@ stage_runtime() {
   if ! have hermes; then
     bash "$REPO/scripts/setup-hermes.sh" || echo "VERIFY: setup-hermes.sh exit + symlink"
   fi
-  echo "runtime: $(which gbrain hermes bun 2>/dev/null)"
+  # Legacy boxes arrive with an old hermes already on PATH; install-if-missing
+  # leaves them thousands of commits behind (validated live 2026-07-14 fleet
+  # migration: 0.16 boxes kept 0.16, gateway then FATAL on the 0.18 config).
+  if [ -n "${HERMES_VERSION:-}" ] && ! hermes --version 2>/dev/null | grep -q "v${HERMES_VERSION%.*}"; then
+    hermes update || echo "VERIFY: hermes update to $HERMES_VERSION"
+  fi
+  # The 0.18 whatsapp adapter resolves its bridge from the hermes-agent venv's
+  # site-packages/scripts, which the package does not ship; and the adapter
+  # imports aiohttp, also absent from the uv venv (both validated live 2026-07-14).
+  SP=/root/.local/share/uv/tools/hermes-agent/lib/python3.11/site-packages
+  if [ -d "$SP" ]; then
+    [ -e "$SP/scripts" ] || ln -sfn /opt/hermes/scripts "$SP/scripts"
+    /root/.local/bin/uv pip install --python /root/.local/share/uv/tools/hermes-agent/bin/python aiohttp >/dev/null 2>&1 \
+      || echo "VERIFY: aiohttp install into the hermes-agent venv"
+  fi
+  echo "runtime: $(which gbrain hermes bun 2>/dev/null) hermes=$(hermes --version 2>/dev/null | head -1)"
 }
 
 # =============================================================================
@@ -755,6 +770,23 @@ stage_portal() {
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='rereset_portal'" | grep -q 1 \
     || sudo -u postgres psql -c "CREATE DATABASE rereset_portal OWNER portal"
   sudo -u postgres psql -d rereset_portal -f "$PORTAL/db/portal-schema.sql" >/dev/null 2>&1 || echo "VERIFY: portal schema apply"
+  # Numbered migrations: the portal has no auto-runner, and every box cutover on
+  # 2026-07-14 needed 008/009/010 applied by hand. Track applied files in a
+  # ledger table so re-runs are cheap and ordered.
+  sudo -u postgres psql -d rereset_portal -c \
+    "CREATE TABLE IF NOT EXISTS _migrations (filename text PRIMARY KEY, applied_at timestamptz DEFAULT now())" >/dev/null 2>&1
+  for MIG in "$PORTAL"/db/migrations/*.sql; do
+    [ -e "$MIG" ] || continue
+    MB=$(basename "$MIG")
+    if ! sudo -u postgres psql -d rereset_portal -tAc "SELECT 1 FROM _migrations WHERE filename='$MB'" | grep -q 1; then
+      if sudo -u postgres psql -d rereset_portal -v ON_ERROR_STOP=1 -f "$MIG" >/dev/null 2>&1; then
+        sudo -u postgres psql -d rereset_portal -c "INSERT INTO _migrations (filename) VALUES ('$MB') ON CONFLICT DO NOTHING" >/dev/null 2>&1
+        echo "migration applied: $MB"
+      else
+        echo "VERIFY: migration $MB failed (may predate the ledger; inspect + insert into _migrations manually if already applied)"
+      fi
+    fi
+  done
   sudo -u postgres psql -d rereset_portal -c \
     "GRANT ALL ON SCHEMA public TO portal; GRANT ALL ON ALL TABLES IN SCHEMA public TO portal; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO portal;" >/dev/null 2>&1
 
