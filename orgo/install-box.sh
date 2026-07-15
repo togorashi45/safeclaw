@@ -789,6 +789,11 @@ stage_portal() {
   done
   sudo -u postgres psql -d rereset_portal -c \
     "GRANT ALL ON SCHEMA public TO portal; GRANT ALL ON ALL TABLES IN SCHEMA public TO portal; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO portal;" >/dev/null 2>&1
+  # Future migrations run as postgres; without default privileges every new
+  # table is invisible to the portal role (fleet-wide "permission denied for
+  # table integration_connections", 2026-07-15).
+  sudo -u postgres psql -d rereset_portal -c \
+    "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO portal; ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO portal;" >/dev/null 2>&1
 
   # 3. env. AUTH_SECRET persists a rebuild; secrets stay on the box, chmod 600.
   #    Inject AUTH_SECRET (+ AUTH_COOKIE_DOMAIN=.rereset.ai) to SHARE cross-subdomain SSO across
