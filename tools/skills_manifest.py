@@ -112,6 +112,10 @@ def skill_record(skill_md_path: str, skills_root: str) -> dict | None:
         # tools declares which toolsets the body needs so they can load lazily.
         "auto_load": bool(fm.get("auto_load", False)),
         "tools": fm.get("tools") or [],
+        # Declared data sources (SOURCE-DISCOVERY.md): ordered list of
+        # {kind, optional} so the portal can show what a skill uses and
+        # what is missing on this box.
+        "sources": hermes.get("sources") or [],
         "path": os.path.relpath(skill_md_path, skills_root),
     }
 
@@ -301,7 +305,7 @@ def main(argv: list[str]) -> int:
         "kept": [
             {k: r[k] for k in ("name", "category", "description", "tags",
                                "requires_toolsets", "boundary", "auto_load",
-                               "tools", "path")}
+                               "tools", "sources", "path")}
             for r in kept
         ],
         "dropped": [{"name": r["name"], "category": r["category"]} for r in dropped],
