@@ -1,0 +1,1 @@
+{"default": null, "companies": {}, "notes": "Per-client escrow contacts. Shape: companies.<key> = {name, contacts:[{name,email,role}]}. The deal intake title_company field routes here."}
