@@ -10,7 +10,7 @@ metadata:
     category: real-estate
     sources:
       - {kind: brain, optional: false}
-      - {kind: ghl-pipelines, optional: true}
+      - {kind: gohighlevel, optional: true}
       - {kind: googlesheets, optional: true}
 ---
 
