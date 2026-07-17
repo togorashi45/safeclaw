@@ -21,7 +21,10 @@ if not key: die(2, "NO_KEY: RENTCAST_API_KEY not set on this box")
 
 day_cap = int(os.environ.get("RENTCAST_DAILY_CAP", "25"))
 mon_cap = int(os.environ.get("RENTCAST_MONTHLY_CAP", "400"))
-state_dir = "/var/lib/rentcast"; os.makedirs(state_dir, exist_ok=True)
+state_dir = os.environ.get("RENTCAST_STATE_DIR", "/var/lib/rentcast")
+try: os.makedirs(state_dir, exist_ok=True)
+except PermissionError:
+    state_dir = os.path.expanduser("~/.rentcast"); os.makedirs(state_dir, exist_ok=True)
 sf = os.path.join(state_dir, "usage.json")
 now = time.localtime(); day = time.strftime("%Y-%m-%d", now); mon = time.strftime("%Y-%m", now)
 u = {"day": day, "day_n": 0, "mon": mon, "mon_n": 0}
