@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""agent-sources - probe what THIS box actually has, so skills adapt instead of assume.
+
+Prints JSON: composio connections, MCP/supervisor services, CLI tools, brain,
+portal collections. Read-only, no network beyond localhost + Composio API.
+Usage: agent-sources [--pretty]
+"""
+import json, os, shutil, subprocess, sys, urllib.request
+
+def sh(cmd):
+    try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15).stdout.strip()
+    except Exception: return ""
+
+out = {"box": sh("hostname"), "client_slug": None, "connections": [], "services": [],
+       "clis": {}, "brain": {}, "portal_collections": [], "notes": []}
+
+# identity
+for f in ("/opt/install.env", "/opt/rereset-portal/.env.local"):
+    if os.path.exists(f):
+        for line in open(f):
+            if line.startswith(("CLIENT_SLUG=", "NEXT_PUBLIC_PORTAL_SLUG=")):
+                out["client_slug"] = line.split("=",1)[1].strip()
+
+# composio connected accounts
+key = ""
+for f in ("/root/.hermes/.env", "/opt/install.env"):
+    if os.path.exists(f):
+        for line in open(f):
+            if line.startswith("COMPOSIO_API_KEY="): key = line.split("=",1)[1].strip()
+if key:
+    try:
+        req = urllib.request.Request("https://backend.composio.dev/api/v3/connected_accounts",
+                                     headers={"x-api-key": key})
+        d = json.load(urllib.request.urlopen(req, timeout=15))
+        out["connections"] = sorted({i.get("toolkit",{}).get("slug","?") for i in d.get("items",[])
+                                     if i.get("status") == "ACTIVE"})
+    except Exception as e:
+        out["notes"].append(f"composio probe failed: {e}")
+
+# supervisor services (MCPs, bridges, ingest)
+out["services"] = [l.split()[0] for l in sh("supervisorctl status").splitlines()
+                   if l.strip() and "RUNNING" in l]
+
+# known CLI tools skills care about
+for cli in ("rentcast-comp", "gbrain", "ghl", "recolorado", "sheets"):
+    p = shutil.which(cli)
+    if p: out["clis"][cli] = p
+for extra in ("/opt/recolorado-cli", "/opt/lead-forge"):
+    if os.path.exists(extra): out["clis"][os.path.basename(extra)] = extra
+
+# brain: reachable + page types
+if shutil.which("gbrain"):
+    types = sh("gbrain types 2>/dev/null") or sh("gbrain stats 2>/dev/null")
+    out["brain"] = {"cli": True, "info": types.splitlines()[:12]}
+
+# portal doc-store collections (what structured state exists)
+tables = sh("sudo -u postgres psql -d rereset_portal -t -A -c \"SELECT table_name FROM information_schema.tables WHERE table_schema='public'\" 2>/dev/null")
+out["portal_collections"] = [t for t in tables.splitlines() if t]
+
+print(json.dumps(out, indent=2 if "--pretty" in sys.argv else None))
