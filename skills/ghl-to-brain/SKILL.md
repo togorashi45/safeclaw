@@ -9,6 +9,9 @@ metadata:
   hermes:
     tags: [ghl, gohighlevel, crm, ingestion, brain, integration]
     category: integrations
+    sources:
+      - {kind: gohighlevel, optional: false}
+      - {kind: brain, optional: false}
     requires_toolsets: [native-mcp]
 ---
 

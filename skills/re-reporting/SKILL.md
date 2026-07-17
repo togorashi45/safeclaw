@@ -8,6 +8,11 @@ metadata:
   hermes:
     tags: ['reporting', 'kpi', 'pnl']
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: gohighlevel, optional: true}
+      - {kind: gmail, optional: true}
+      - {kind: googlecalendar, optional: true}
 ---
 
 # Reporting & Finance Playbooks

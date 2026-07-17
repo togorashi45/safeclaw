@@ -8,6 +8,7 @@ metadata:
   hermes:
     tags: [real-estate, router, deprecated]
     category: real-estate
+    sources: []
 ---
 
 # Real Estate Playbooks (now category packs)

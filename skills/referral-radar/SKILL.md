@@ -8,6 +8,9 @@ metadata:
   hermes:
     tags: [referrals, relationships, outreach, brain]
     category: outreach
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: gohighlevel, optional: true}
 ---
 
 # Referral Radar

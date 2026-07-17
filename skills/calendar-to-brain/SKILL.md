@@ -9,6 +9,9 @@ metadata:
   hermes:
     tags: [google-calendar, calendar, ingestion, brain, composio, integration]
     category: integrations
+    sources:
+      - {kind: googlecalendar, optional: false}
+      - {kind: brain, optional: false}
     requires_toolsets: [native-mcp]
 ---
 

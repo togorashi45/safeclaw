@@ -8,6 +8,12 @@ metadata:
   hermes:
     tags: [outreach, prospecting, leadforge, sequential, multi-channel]
     category: outreach
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: gohighlevel, optional: true}
+      - {kind: cli:lead-forge, optional: true}
+      - {kind: gmail, optional: true}
+      - {kind: googlecalendar, optional: true}
     requires_toolsets: [native-mcp]
 ---
 

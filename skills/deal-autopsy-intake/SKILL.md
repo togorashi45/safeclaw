@@ -8,6 +8,12 @@ metadata:
   hermes:
     tags: [intake, underwriting, comps, parcels]
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: cli:recolorado, optional: true}
+      - {kind: cli:rentcast-comp, optional: true}
+      - {kind: portal:transactions, optional: true}
+      - {kind: cli:lead-forge, optional: true}
 ---
 
 # Deal Autopsy on Intake

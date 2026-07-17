@@ -8,6 +8,11 @@ metadata:
   hermes:
     tags: [meetings, prep, notes, brain, calendar]
     category: operations
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: googlecalendar, optional: true}
+      - {kind: gmail, optional: true}
+      - {kind: gohighlevel, optional: true}
     requires_toolsets: [native-mcp]
 ---
 

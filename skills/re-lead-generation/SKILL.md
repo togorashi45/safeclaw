@@ -8,6 +8,11 @@ metadata:
   hermes:
     tags: ['leads', 'prospecting', 'acquisition']
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: gohighlevel, optional: true}
+      - {kind: gmail, optional: true}
+      - {kind: googlecalendar, optional: true}
 ---
 
 # Lead Generation Playbooks

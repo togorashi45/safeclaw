@@ -8,6 +8,10 @@ metadata:
   hermes:
     tags: [leads, response-time, guard, crm]
     category: outreach
+    sources:
+      - {kind: gohighlevel, optional: false}
+      - {kind: brain, optional: false}
+      - {kind: gmail, optional: true}
     crons:
       - name: speed-to-lead-sweep
         schedule: "*/10 * * * *"

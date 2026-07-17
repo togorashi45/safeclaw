@@ -8,6 +8,10 @@ metadata:
   hermes:
     tags: [reporting, weekly, retention, digest]
     category: operations
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: gohighlevel, optional: true}
+      - {kind: portal:transactions, optional: true}
     crons:
       - name: weekly-operator-report
         schedule: "0 18 * * 0"

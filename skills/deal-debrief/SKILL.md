@@ -8,6 +8,10 @@ metadata:
   hermes:
     tags: [debrief, deals, learning, reporting]
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: portal:transactions, optional: true}
+      - {kind: gohighlevel, optional: true}
 ---
 
 # Deal Debrief

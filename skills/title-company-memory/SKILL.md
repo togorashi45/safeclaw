@@ -8,6 +8,9 @@ metadata:
   hermes:
     tags: [title, escrow, tc, brain]
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: portal:transactions, optional: true}
 ---
 
 # Title Company Memory

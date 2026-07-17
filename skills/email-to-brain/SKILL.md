@@ -9,6 +9,9 @@ metadata:
   hermes:
     tags: [gmail, email, ingestion, brain, integration]
     category: integrations
+    sources:
+      - {kind: gmail, optional: false}
+      - {kind: brain, optional: false}
     requires_toolsets: [native-mcp]
 ---
 

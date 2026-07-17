@@ -8,6 +8,11 @@ metadata:
   hermes:
     tags: [comps, arv, rentcast, mls, valuation, acquisitions]
     category: real-estate
+    sources:
+      - {kind: brain, optional: false}
+      - {kind: cli:recolorado, optional: true}
+      - {kind: cli:rentcast-comp, optional: true}
+      - {kind: gohighlevel, optional: true}
 ---
 
 # Comping / ARV

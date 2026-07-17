@@ -9,6 +9,10 @@ metadata:
   hermes:
     tags: [slack, google-drive, attachments, file-transfer, integration]
     category: integrations
+    sources:
+      - {kind: slack, optional: false}
+      - {kind: googledrive, optional: false}
+      - {kind: brain, optional: true}
     requires_toolsets: [native-mcp]
 ---
 

@@ -8,6 +8,11 @@ metadata:
   hermes:
     tags: [tc, transactions, title, closing, portal]
     category: real-estate
+    sources:
+      - {kind: portal:transactions, optional: false}
+      - {kind: gohighlevel, optional: false}
+      - {kind: brain, optional: true}
+      - {kind: gmail, optional: true}
     requires_toolsets: [native-mcp]
     crons:
       - name: tc-ghl-sync
