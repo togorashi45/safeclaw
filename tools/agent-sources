@@ -48,6 +48,20 @@ for cli in ("rentcast-comp", "gbrain", "ghl", "recolorado", "sheets"):
 for extra in ("/opt/recolorado-cli", "/opt/lead-forge"):
     if os.path.exists(extra): out["clis"][os.path.basename(extra)] = extra
 
+# non-Composio GHL wiring: a running ghl-mcp service or a filled GHL_API_KEY
+# is the same capability as a Composio gohighlevel connection (e.g. the
+# 7/16 Travis TC sync ships as ghl-mcp + API key, no Composio account).
+if "gohighlevel" not in out["connections"]:
+    def _envval(path, name):
+        if not os.path.exists(path): return ""
+        for line in open(path):
+            if line.startswith(name + "="): return line.split("=",1)[1].strip()
+        return ""
+    if "ghl-mcp" in out["services"] or any(_envval(f, "GHL_API_KEY")
+            for f in ("/root/.hermes/.env", "/opt/install.env")):
+        out["connections"].append("gohighlevel")
+        out["notes"].append("gohighlevel present via ghl-mcp service / GHL_API_KEY (non-Composio)")
+
 # brain: reachable + page types
 if shutil.which("gbrain"):
     types = sh("gbrain types 2>/dev/null") or sh("gbrain stats 2>/dev/null")
