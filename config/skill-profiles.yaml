@@ -106,3 +106,7 @@ profiles:
     inherits: actor
     description: Default skill set for a client box (v2 golden template).
     drop_categories_add: [github, software-development, data-science, devops]
+    # Installed-not-activated: available in the portal catalog, but OFF until
+    # Jake turns it on for that client (move to keep_skills_add per client).
+    drop_skills:
+      - onmarket-deals
