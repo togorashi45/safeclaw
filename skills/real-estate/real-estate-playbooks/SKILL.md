@@ -17,5 +17,5 @@ category is its own installable pack: `skills/re-<category>/`. If a play you
 need is not on this box, it lives in a pack that is not installed; tell the
 user which pack to turn on from the portal Skills page.
 
-For SafeClaw lead intake (Kanban + GHL), see
+For Hermes lead intake (Kanban + GHL), see
 `../safeclaw-deployment/references/real-estate-lead-intake-kanban-ghl.md`.
