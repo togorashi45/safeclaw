@@ -32,11 +32,16 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # 1. Build the manifest + keeplist for this profile.
+INSTALLED_ARGS=()
+if [ -n "${INSTALLED_JSON:-}" ] && [ -f "${INSTALLED_JSON:-}" ]; then
+    INSTALLED_ARGS=(--installed "$INSTALLED_JSON")
+fi
 "$PYTHON_BIN" "$HERE/skills_manifest.py" \
     --profile "$PROFILE" \
     --skills-dir "$SKILLS_DIR" \
     --config "$CONFIG" \
-    --out "$WORK"
+    --out "$WORK" \
+    "${INSTALLED_ARGS[@]}"
 
 # 2. Delete every skill directory whose SKILL.md is not on the keeplist.
 #    keeplist.txt holds SKILL.md paths relative to SKILLS_DIR.
@@ -49,6 +54,11 @@ while IFS= read -r rel; do
     [ -n "$rel" ] && printf '%s\n' "$(dirname "$rel")"
 done < "$WORK/keeplist.txt" | sort -u > "$WORK/keepdirs.txt"
 
+# PRUNE=0 (on-box toggling): keep pack files on disk, only the index changes.
+# Hermes loads skills through SKILL_INDEX.md, so index-exclusion turns the
+# behavior off; files staying put makes reinstall instant and reversible.
+# PRUNE=1 (default, image builds): delete unkept packs as before.
+if [ "${PRUNE:-1}" = "1" ]; then
 find "$SKILLS_DIR" -name SKILL.md -not -path '*/.git/*' -print0 |
 while IFS= read -r -d '' skillmd; do
     skilldir="$(dirname "$skillmd")"
@@ -58,6 +68,7 @@ while IFS= read -r -d '' skillmd; do
         rm -rf "$skilldir"
     fi
 done
+fi
 
 # 3. Install the always-loaded directory into the skills tree.
 cp "$WORK/SKILL_INDEX.md" "$SKILLS_DIR/SKILL_INDEX.md"

@@ -9,6 +9,10 @@ metadata:
     tags: [tc, transactions, title, closing, portal]
     category: real-estate
     requires_toolsets: [native-mcp]
+    crons:
+      - name: tc-ghl-sync
+        schedule: "*/30 * * * *"
+        command: /opt/rereset-tools/tc-ghl-sync/run.sh >> /var/log/tc-ghl-sync.log 2>&1
 ---
 
 # Transaction Coordination

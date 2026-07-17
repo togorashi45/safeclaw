@@ -243,6 +243,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--profile", default="base", help="profile name from the config")
     ap.add_argument("--config", default=None, help="path to skill-profiles.yaml")
     ap.add_argument("--out", required=True, help="output directory for the artifacts")
+    ap.add_argument("--installed", default=None,
+                    help="path to a JSON array of installed skill slugs; when given, "
+                         "the per-skill install set OVERRIDES the profile: kept = "
+                         "installed + auto_load, and installed packs the profile "
+                         "would drop are re-added")
     args = ap.parse_args(argv)
 
     config_path = args.config or os.path.join(
@@ -267,6 +272,20 @@ def main(argv: list[str]) -> int:
         return 3
 
     marked = apply_profile(records, profile)
+
+    if args.installed:
+        try:
+            with open(args.installed, "r", encoding="utf-8") as fh:
+                installed = set(json.load(fh))
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"skills_manifest: bad --installed file: {exc}\n")
+            return 2
+        # Per-skill install set: a pack is kept iff installed OR auto_load
+        # (the metaskill/router must never disappear). Profile still decides
+        # the candidate universe scanned from disk.
+        for r in marked:
+            r["kept"] = r["name"] in installed or r.get("auto_load", False)
+
     kept = [r for r in marked if r["kept"]]
     dropped = [r for r in marked if not r["kept"]]
 

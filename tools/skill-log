@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# skill-log <slug> [event] - one-line skill usage telemetry into box Postgres.
+# Creates the table on first use. Never fails the caller.
+SLUG="${1:?usage: skill-log <slug> [event]}"; EVENT="${2:-invoked}"
+sudo -u postgres psql -d rereset_portal -q <<SQL 2>/dev/null || true
+CREATE TABLE IF NOT EXISTS skill_usage (
+  id bigserial PRIMARY KEY, skill_slug text NOT NULL,
+  event text NOT NULL DEFAULT 'invoked', at timestamptz NOT NULL DEFAULT now());
+INSERT INTO skill_usage (skill_slug, event) VALUES ('$(printf '%s' "$SLUG" | tr -cd 'a-z0-9-')', '$(printf '%s' "$EVENT" | tr -cd 'a-z0-9_-')');
+SQL
