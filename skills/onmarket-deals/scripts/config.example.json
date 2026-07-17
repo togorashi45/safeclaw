@@ -1,0 +1,22 @@
+{
+  "client": "rise-homes-co",
+  "notes": "Travis Wilcox / Rise Homes Co - Denver metro front range. Free Redfin source until MLS (CTM) access lands.",
+  "regions": [
+    {"name": "Denver County",     "market": "denver", "region_id": 377, "region_type": 5},
+    {"name": "Adams County",      "market": "denver", "region_id": 361, "region_type": 5},
+    {"name": "Arapahoe County",   "market": "denver", "region_id": 363, "region_type": 5},
+    {"name": "Jefferson County",  "market": "denver", "region_id": 391, "region_type": 5},
+    {"name": "Douglas County",    "market": "denver", "region_id": 379, "region_type": 5},
+    {"name": "Broomfield County", "market": "denver", "region_id": 368, "region_type": 5},
+    {"name": "Boulder County",    "market": "denver", "region_id": 367, "region_type": 5}
+  ],
+  "uipt": "1,2,3,4",
+  "num_homes_per_region": 6000,
+  "fresh_max_dom": 1,
+  "stale_min_dom": 60,
+  "max_price": 1500000,
+  "fixer_ppsf_ratio": 0.75,
+  "fixer_max_year_built": 1985,
+  "max_phone_fetches": 40,
+  "detail_sleep_seconds": [1.0, 2.5]
+}
