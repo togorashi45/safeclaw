@@ -9,7 +9,7 @@ Recorded so nobody re-litigates these or "fixes" something deliberate. Source:
 the golden installer audit, `mind/reports/2026-08-02-golden-installer-audit.md`
 in the marcus repo.
 
-## 1. gbrain comes from `rspur-hq/gbrain`, latest, with a floor
+## 1. gbrain comes from `togorashi45/gbrain`, latest, with a floor
 
 The installer used to clone upstream `garrytan/gbrain` at HEAD. The fixes our own
 fleet found live in our fork, not upstream, so every box shipped without them.

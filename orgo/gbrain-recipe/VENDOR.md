@@ -21,7 +21,7 @@ A box being built must not fail because GitHub is slow or the fork moved.
 
 | Field | Value |
 |---|---|
-| Source repo | `rspur-hq/gbrain` |
+| Source repo | `togorashi45/gbrain` |
 | Source path | `scripts/vm-hermes-setup.sh` |
 | Vendored commit | `0ac1898f363ee9a96cf1eb517d66022dda88bb81` |
 | Vendored gbrain version | `0.42.70.0` |

@@ -12,7 +12,7 @@ This is the canonical client box build: **standard, up-to-date Hermes + standard
 
 Every box runs this exact shape. Proven across Matt, Travis, Elise, Phil.
 
-- **Brain:** gBrain from **our fork `rspur-hq/gbrain`, always latest**, on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` (the database) + `gbrain-http` (the native MCP endpoint on `127.0.0.1:3131`). Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim), chat and reasoning and dream extraction all on `openrouter:openai/gpt-5.2`.
+- **Brain:** gBrain from **our fork `togorashi45/gbrain`, always latest**, on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` (the database) + `gbrain-http` (the native MCP endpoint on `127.0.0.1:3131`). Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim), chat and reasoning and dream extraction all on `openrouter:openai/gpt-5.2`.
   - **No hard pin, but a floor.** `GBRAIN_MIN_VERSION` in `install-box.sh` is `0.42.69.0` and the install fails loudly below it. Each part of the floor is a fix the box configuration depends on: `0.42.67.0` (file-plane chat model no longer shadowed by the hardcoded Anthropic tier default, the zero-takes bug), `0.42.68.0` (reranker model threaded through the gateway seam), `0.42.69.0` (email-headers conversation parser). Raise the floor when we depend on something newer. Never lower it.
   - **Why the fork:** the fixes above were found on our fleet and shipped in our fork. Upstream `garrytan/gbrain` does not carry them. The old installer cloned upstream, which is how the fleet shipped a brain that produced zero takes.
   - **Self-upgrade is off on every box** (`self_upgrade.mode=off`). The weekly maintenance window is the only path that changes a version.
@@ -130,7 +130,7 @@ Every box runs `orgo/routines/gbrain-weekly-maintenance.sh`, registered with `he
 - **Fleet Sunday 08:00 UTC.** Every other box reads that verdict from `MAINT_GATE_URL` and upgrades only if the canary's doctor score did not regress and its smoke test passed, and the verdict is under 48h old. **Fails closed:** an unreadable gate means the box runs its checks and does not upgrade. Sunday-night-only was rejected because a bad upgrade would land with no buffer before Monday.
 - **Per box, per run:** `gbrain doctor` with the score recorded, stale locks cleared, `embed --stale`, dream cadence asserted still 6-hourly, the DB-plane model keys asserted still set, the spend gates asserted still configured, `self_upgrade.mode` asserted still off, and the live smoke test (page in, extraction, takes count grew).
 - **Covers both** gbrain and Hermes.
-- **Fork sync.** "Latest from our fork" goes stale unless `rspur-hq/gbrain` is merged from upstream `garrytan/gbrain` on a recurring basis. That is a repo job, not a box job. Nothing in the window does it.
+- **Fork sync.** "Latest from our fork" goes stale unless `togorashi45/gbrain` is merged from upstream `garrytan/gbrain` on a recurring basis. That is a repo job, not a box job. Nothing in the window does it.
 
 ### Verifying a box without reprovisioning it
 

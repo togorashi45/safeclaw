@@ -82,9 +82,14 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 #
 # The bug was never "unpinned". It was the wrong repo: the installer cloned
 # upstream garrytan/gbrain, so boxes never carried the fixes our own fleet found
-# and we shipped back into rspur-hq/gbrain. Latest from the fork wins, with a
+# and we shipped back into our own fork. Latest from the fork wins, with a
 # MINIMUM VERSION FLOOR that fails the install loudly when it is not met.
-: "${GBRAIN_PKG:=github:rspur-hq/gbrain}"
+#
+# Fork moved 2026-08-02: rspur-hq/gbrain -> togorashi45/gbrain. rspur-hq is an
+# account we cannot push to (created outside our control, recovery email is an
+# AgentMail inbox), so it could never receive our fixes. It stays readable, so
+# boxes still on the old URL keep working until they are updated.
+: "${GBRAIN_PKG:=github:togorashi45/gbrain}"
 # FLOOR JUSTIFICATION. Each of these is a fix this box's configuration depends
 # on, so a build below the floor is broken in a way doctor will not tell you:
 #   0.42.67.0  resolveModel() configFileValue slot. Below this, the hardcoded
@@ -569,7 +574,7 @@ stage_brain_init() {
     || echo "NOTE: gbrain init returned nonzero (already initialized is normal on a re-run)"
 
   # THE PRODUCT'S OWN RECIPE. orgo/gbrain-recipe/vm-hermes-setup.sh is a verbatim
-  # copy of scripts/vm-hermes-setup.sh from rspur-hq/gbrain: file-plane config,
+  # copy of scripts/vm-hermes-setup.sh from togorashi45/gbrain: file-plane config,
   # fork install, the DB-plane model mirror, MCP registration, doctor. Vendored
   # so provisioning never depends on network state at install time. Provenance
   # and the refresh path are in orgo/gbrain-recipe/VENDOR.md. Do not hand edit
@@ -961,7 +966,7 @@ stage_cron() {
   #
   # hermes cron create, never a hand-edited crontab. Hermes owns the box crontab.
   #
-  # Fork sync note: "latest from our fork" goes stale unless rspur-hq/gbrain is
+  # Fork sync note: "latest from our fork" goes stale unless togorashi45/gbrain is
   # merged from upstream garrytan/gbrain on a recurring basis. That merge is a
   # repo job, not a box job, and nothing here does it for us.
   {

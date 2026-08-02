@@ -8,8 +8,8 @@
 # and run after it. See VENDOR.md.
 set -euo pipefail
 
-FORK="${GBRAIN_FORK_URL:-https://github.com/rspur-hq/gbrain.git}"
-REF="${GBRAIN_FORK_REF:-main}"
+FORK="${GBRAIN_FORK_URL:-https://github.com/togorashi45/gbrain.git}"
+REF="${GBRAIN_FORK_REF:-master}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$HERE/vm-hermes-setup.sh"
 APPLY=0

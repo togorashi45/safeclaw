@@ -31,7 +31,7 @@ export GBRAIN_HOME=/opt/brain
 
 # Keep this in sync with GBRAIN_MIN_VERSION in orgo/install-box.sh.
 GBRAIN_MIN_VERSION="${GBRAIN_MIN_VERSION:-0.42.69.0}"
-GBRAIN_PKG="${GBRAIN_PKG:-github:rspur-hq/gbrain}"
+GBRAIN_PKG="${GBRAIN_PKG:-github:togorashi45/gbrain}"
 MAINT_ROLE="${MAINT_ROLE:-fleet}"
 MAINT_GATE_URL="${MAINT_GATE_URL:-}"
 MAINT_GATE_FILE="${MAINT_GATE_FILE:-/opt/brain/maintenance-gate.json}"
