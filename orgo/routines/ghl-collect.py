@@ -48,6 +48,18 @@ def api(path):
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", (s or "untitled").lower()).strip("-")[:60]
 
+def yq(s):
+    """Emit a YAML double-quoted scalar.
+
+    Deal names routinely contain a colon (via the "Deal: " prefix), a comma,
+    an apostrophe or an em dash. An unquoted colon breaks the frontmatter
+    mapping parse. Always emitting a fresh double-quoted scalar from the raw
+    value is idempotent: the input never carries quotes of its own, and any
+    that appear are escaped rather than re-wrapped.
+    """
+    s = "" if s is None else str(s)
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
 os.makedirs(ROOT + "/deals", exist_ok=True)
 os.makedirs(BOARD, exist_ok=True)
 
@@ -82,8 +94,8 @@ for o in opps:
     summary[pl][stg][0] += 1
     summary[pl][stg][1] += val
     age = days_since(o.get("lastStageChangeAt") or o.get("updatedAt"))
-    body = ["---", f"title: Deal: {o.get('name','')}", "source: ghl",
-            f"pipeline: {pl}", f"stage: {stg}", "---", "",
+    body = ["---", f"title: {yq('Deal: ' + str(o.get('name','') or ''))}", "source: ghl",
+            f"pipeline: {yq(pl)}", f"stage: {yq(stg)}", "---", "",
             f"# {o.get('name','')}", "",
             f"- Pipeline: {pl}", f"- Stage: {stg}", f"- Value: ${val}",
             f"- Status: {o.get('status')}", f"- Source: {o.get('source','')}",
