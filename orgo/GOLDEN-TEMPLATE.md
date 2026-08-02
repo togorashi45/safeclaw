@@ -12,7 +12,10 @@ This is the canonical client box build: **standard, up-to-date Hermes + standard
 
 Every box runs this exact shape. Proven across Matt, Travis, Elise, Phil.
 
-- **Brain:** gBrain `0.42.42.0` on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` + `safeclaw-brain`. Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim).
+- **Brain:** gBrain from **our fork `rspur-hq/gbrain`, always latest**, on **local Postgres 16 + pgvector**, self-contained per box (a client can leave with their data; no shared DB). Supervised as `postgres-brain` (the database) + `gbrain-http` (the native MCP endpoint on `127.0.0.1:3131`). Embeddings via OpenRouter `openai/text-embedding-3-small` (1536-dim), chat and reasoning and dream extraction all on `openrouter:openai/gpt-5.2`.
+  - **No hard pin, but a floor.** `GBRAIN_MIN_VERSION` in `install-box.sh` is `0.42.69.0` and the install fails loudly below it. Each part of the floor is a fix the box configuration depends on: `0.42.67.0` (file-plane chat model no longer shadowed by the hardcoded Anthropic tier default, the zero-takes bug), `0.42.68.0` (reranker model threaded through the gateway seam), `0.42.69.0` (email-headers conversation parser). Raise the floor when we depend on something newer. Never lower it.
+  - **Why the fork:** the fixes above were found on our fleet and shipped in our fork. Upstream `garrytan/gbrain` does not carry them. The old installer cloned upstream, which is how the fleet shipped a brain that produced zero takes.
+  - **Self-upgrade is off on every box** (`self_upgrade.mode=off`). The weekly maintenance window is the only path that changes a version.
 - **Gateway:** exactly one supervised gateway program running `hermes gateway run` on the **single default profile**. No actor/reader split (collapsed 2026-06-19): one profile holds the model, MCP servers, channel tokens, cron jobs, and the ingest scripts. The default profile is the only gateway that runs, so it is the only scheduler that ticks.
 - **Console / tunnel / dashboard:** SafeClaw UI on `:8899`, cloudflared named tunnel, Hermes dashboard on `:9119`, kept alive by the tmux `watchdog`. The watchdog never manages the brain (that is supervised) to avoid the dual-writer corruption that killed PGlite.
 - **Provisioning gotcha:** the brain role needs `CREATE ROLE brain LOGIN SUPERUSER BYPASSRLS` (superuser alone does not set `rolbypassrls`, and gBrain's v24 migration halts without it). The repeatable procedure is `stage_brain_db` in `install-box.sh`.
@@ -115,7 +118,29 @@ What the MVP deliberately leaves out: a full automated eval harness, CI, and hea
 3. Deploy the agent persona: fill `orgo/SOUL.template.md` for the client, strip the comment header, save it on the box as `~/.hermes/SOUL.md`.
 4. Connect channels the client uses: WhatsApp (bridge + QR), Telegram (bot token), Slack (socket tokens).
 5. Composio OAuth via the onboarding app: Gmail, Calendar, Docs, Sheets, Tasks.
-6. Ingestion routines are deployed + scheduled on the default profile by `stage_cron`: `email-ingest` (hourly), `calendar-sync` (daily), `gbrain-dream` (daily), `gbrain-hygiene` (weekly), and `ghl-sync` (hourly, when `ENABLE_GHL_SYNC=1`) for CRM clients.
+6. Ingestion routines are deployed + scheduled on the default profile by `stage_cron`: `email-ingest` (hourly), `calendar-sync` (daily), `gbrain-dream` (**every 6 hours**), `gbrain-hygiene` (weekly), `gbrain-maintenance` (weekly window, see below), and `ghl-sync` (hourly, when `ENABLE_GHL_SYNC=1`) for CRM clients.
+
+---
+
+## Weekly maintenance window (canary Saturday, fleet Sunday)
+
+Every box runs `orgo/routines/gbrain-weekly-maintenance.sh`, registered with `hermes cron create` (Hermes owns the box crontab; never hand edit it). This window is the only path that changes a gbrain or Hermes version anywhere.
+
+- **Canary Saturday 08:00 UTC.** One box in the fleet has `MAINT_ROLE=canary`. It upgrades first, runs the full check set, and publishes a verdict (`score_before`, `score_after`, `smoke`, `verdict`) to `MAINT_GATE_PUBLISH_URL`.
+- **Fleet Sunday 08:00 UTC.** Every other box reads that verdict from `MAINT_GATE_URL` and upgrades only if the canary's doctor score did not regress and its smoke test passed, and the verdict is under 48h old. **Fails closed:** an unreadable gate means the box runs its checks and does not upgrade. Sunday-night-only was rejected because a bad upgrade would land with no buffer before Monday.
+- **Per box, per run:** `gbrain doctor` with the score recorded, stale locks cleared, `embed --stale`, dream cadence asserted still 6-hourly, the DB-plane model keys asserted still set, the spend gates asserted still configured, `self_upgrade.mode` asserted still off, and the live smoke test (page in, extraction, takes count grew).
+- **Covers both** gbrain and Hermes.
+- **Fork sync.** "Latest from our fork" goes stale unless `rspur-hq/gbrain` is merged from upstream `garrytan/gbrain` on a recurring basis. That is a repo job, not a box job. Nothing in the window does it.
+
+### Verifying a box without reprovisioning it
+
+```bash
+sudo bash /opt/install-box.sh verify      # version floor, doctor score, model keys, live smoke, MCP endpoint
+```
+
+### Spend gates (set at install, asserted weekly)
+
+`spend.posture=gated`, `sync.cost_gate_min_usd=0.50`, `embed.backfill_max_usd=5`, `embed.backfill_max_usd_per_source_24h=10`. All four were unset when the OpenRouter balance hit zero on 2026-08-01. The stated posture matters more than the numbers: it is auditable and it does not move when a product default changes.
 7. Install skill packs: vendor `real-estate` + the operations skills; declare the curated ARMY packs.
 8. Fill the box scaffolding: `AGENTS.md` (as-is), `knowledge/` (from the templates, per client), `decisions/` (add any per-box notes). Run `evals/guardrails.md` against the agent before handing the box to the client.
 
