@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Hourly email-ingestion cron entrypoint.
 #
+# Heartbeat: every run appends to the gbrain integrations plane so
+# `gbrain integrations status email-to-brain` reflects reality. Without it
+# the plane reported AVAILABLE while this ran 24 times a day.
+#
 # Wraps email-ingest.sh with the two reliability fixes for the remote-MCP
 # cold-start problem (Composio gmail is a remote streamable-HTTP server that
 # registers its tools a few seconds AFTER the local brain, so a single agent
@@ -20,7 +24,17 @@
 #     ATTEMPTS  cold-start retry attempts         (default 4)
 set +e
 export HERMES_HOME=/root/.hermes
+export GBRAIN_HOME=/opt/brain   # the heartbeat path lives under this home; a wrong home writes where nothing reads
 export PATH=/usr/local/bin:/root/.bun/bin:/tmp/node-v20.18.1-linux-x64/bin:$PATH
+
+HB=/root/.hermes/scripts/lib/heartbeat.sh
+if [ -f "$HB" ]; then
+  # shellcheck source=/dev/null
+  . "$HB"
+else
+  hb_ok() { :; }
+  hb_fail() { :; }
+fi
 
 WINDOW="${1:-3h}"; MAXTURNS="${2:-60}"; ATTEMPTS="${3:-4}"
 INGEST=/root/.hermes/scripts/email-ingest.sh
@@ -59,6 +73,7 @@ for w in $(seq 1 6); do
 done
 if [ -n "$URL" ] && [ "$ready" -ne 1 ]; then
   echo "INGEST ERROR: Composio gmail MCP not reachable after pre-flight (skipping run)"
+  hb_fail email-to-brain ingest "gmail MCP not reachable after pre-flight"
   exit 1
 fi
 
@@ -66,11 +81,14 @@ fi
 for try in $(seq 1 "$ATTEMPTS"); do
   bash "$INGEST" "$WINDOW" "$MAXTURNS" > /tmp/ingest.log 2>&1
   if grep -q "INGEST RESULT:" /tmp/ingest.log && ! tail -3 /tmp/ingest.log | grep -q "INGEST ERROR"; then
-    grep -o 'INGEST RESULT:.*' /tmp/ingest.log | tail -1
+    RESULT=$(grep -o 'INGEST RESULT:.*' /tmp/ingest.log | tail -1)
+    echo "$RESULT"
+    hb_ok email-to-brain ingest "$RESULT"
     exit 0
   fi
   echo "attempt $try did not complete cleanly; retrying"
   sleep 12
 done
 echo "INGEST ERROR: exhausted $ATTEMPTS attempts"
+hb_fail email-to-brain ingest "exhausted $ATTEMPTS attempts"
 exit 1

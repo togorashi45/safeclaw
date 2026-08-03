@@ -13,7 +13,9 @@
 # RUN: push this file + a filled install.env to the box, then:
 #        sudo bash /opt/install-box.sh            # full run
 #        sudo bash /opt/install-box.sh base brain # selected stages
-# Idempotent: safe to re-run. Logs to /opt/install.log.
+#        sudo bash /opt/install-box.sh verify     # doctor + live smoke only
+# Idempotent: safe to re-run, AND a re-run converges (it upgrades; it does not
+# skip because something already exists). Logs to /opt/install.log.
 #
 # STATUS: authored, NOT yet validated end to end on a live box (the base stage
 # was validated on Kim's box 2026-06-14: apt needs --fix-missing + disabling the
@@ -21,6 +23,13 @@
 # gbrain/hermes CLI flags marked VERIFY on the first real run.
 # =============================================================================
 set -uo pipefail
+
+# Every stage records pass or fail here. The driver prints the tally at the end
+# and exits nonzero if anything failed, so a half-failed re-run can no longer
+# print a green done banner (audit finding 9).
+STAGE_RESULTS=""
+STAGE_FAILED=0   # count of failures, not a flag, so the driver can attribute them per stage
+fail_stage() { echo "FAIL: $*"; STAGE_FAILED=$((STAGE_FAILED + 1)); return 1; }
 LOG=/opt/install.log
 exec > >(tee -a "$LOG") 2>&1
 echo "================ install-box start $(date -u) ================"
@@ -66,6 +75,41 @@ ENV_FILE="${INSTALL_ENV:-/opt/install.env}"
 : "${AUTH_SECRET:=}"                          # inject the SHARED secret to keep cross-subdomain SSO; blank = per-box generated
 : "${AUTH_COOKIE_DOMAIN:=}"                   # set to .rereset.ai to share the session cookie across all *.rereset.ai portals
 : "${GBRAIN_EMBED_MODEL:=openrouter:openai/text-embedding-3-small}"  # brain embed model; override per box (e.g. ollama:nomic-embed-text)
+: "${GBRAIN_EMBED_DIMS:=1536}"               # MUST match the embed model; the schema bootstraps to this width
+: "${GBRAIN_CHAT_MODEL:=openrouter:openai/gpt-5.2}"          # openai/gpt-5.2-mini does NOT exist; a typo fails at call time, not config time
+: "${GBRAIN_RERANKER_MODEL:=openrouter:cohere/rerank-4-fast}" # the default zeroentropyai reranker needs a key we do not have
+# gbrain source: OUR FORK, always latest, never hard pinned.
+#
+# The bug was never "unpinned". It was the wrong repo: the installer cloned
+# upstream garrytan/gbrain, so boxes never carried the fixes our own fleet found
+# and we shipped back into our own fork. Latest from the fork wins, with a
+# MINIMUM VERSION FLOOR that fails the install loudly when it is not met.
+#
+# Fork moved 2026-08-02: rspur-hq/gbrain -> togorashi45/gbrain. rspur-hq is an
+# account we cannot push to (created outside our control, recovery email is an
+# AgentMail inbox), so it could never receive our fixes. It stays readable, so
+# boxes still on the old URL keep working until they are updated.
+: "${GBRAIN_PKG:=github:togorashi45/gbrain}"
+# FLOOR JUSTIFICATION. Each of these is a fix this box's configuration depends
+# on, so a build below the floor is broken in a way doctor will not tell you:
+#   0.42.67.0  resolveModel() configFileValue slot. Below this, the hardcoded
+#              anthropic tier default shadows our file-plane chat_model, and
+#              dream/extract silently produce ZERO takes on an OpenRouter-only
+#              brain. This is the failure the fleet shipped.
+#   0.42.68.0  buildGatewayConfig() threads reranker_model through the seam. We
+#              set reranker_model in the file plane, so below this our reranker
+#              config is dead and every search runs unreranked.
+#   0.42.69.0  email-headers conversation parser builtin. Our email sense writes
+#              header-style pages; below this they never parse as conversations.
+# We depend on all three, so the floor is the highest of them.
+: "${GBRAIN_MIN_VERSION:=0.42.69.0}"
+# Weekly maintenance window (canary Saturday, fleet Sunday). See
+# orgo/routines/gbrain-weekly-maintenance.sh. Exactly one box in the fleet is
+# the canary.
+: "${MAINT_ROLE:=fleet}"                     # canary | fleet
+: "${MAINT_GATE_URL:=}"                      # where a fleet box reads the canary verdict; unset = fleet never upgrades
+: "${MAINT_GATE_PUBLISH_URL:=}"              # canary only: where to POST the verdict
+: "${MAINT_GATE_PUBLISH_SECRET:=}"           # canary only: shared secret for the publish POST
 : "${TS_AUTHKEY:=}"                           # Tailscale auth key; set to join the tailnet (off-box writers reach this box over it)
 # Connect page (on-box Composio "connect your accounts" page, served by safeclaw-ui):
 : "${CONNECT_PORT:=8899}"                    # loopback port for the connect Flask app
@@ -77,9 +121,20 @@ PORTAL=/opt/rereset-portal
 BRAIN=/opt/brain
 PGV=16
 
+# GBRAIN_HOME MOVES THE CONFIG PATH. With /opt/brain, gbrain reads
+# /opt/brain/.gbrain/config.json, not /root/.gbrain/config.json. Every routine
+# on the box already exports this; the installer never did, so `gbrain init`
+# wrote its config to one home while every scheduled run read another. The
+# file-plane settings (embed model, chat model, reranker, schema pack) were
+# invisible to every cron. The same split sends audit JSONL to a directory
+# doctor never looks at. Export it once, here, before any gbrain invocation.
+export GBRAIN_HOME="$BRAIN"
+
 gen() { openssl rand -hex "${1:-16}"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 say() { echo; echo "---- $* ----"; }
+# Version compare that understands 0.42.9 < 0.42.69. Never string compare.
+version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
 
 # =============================================================================
 stage_base() {
@@ -253,6 +308,52 @@ EOF
   pg_ctlcluster "$PGV" main stop 2>/dev/null || true
   supervisorctl reread; supervisorctl update
   supervisorctl restart postgres-brain 2>/dev/null || supervisorctl start postgres-brain 2>/dev/null || true
+  # WRITE THE FILE-PLANE CONFIG NOW, before anything invokes gbrain.
+  # Pitfall 10: if a DATABASE_URL is visible when the gbrain package postinstall
+  # runs migrations, the schema bootstraps with gbrain's COMPILED defaults
+  # (ZeroEntropy zembed-1 at 1280 dims). A config.json written afterwards at
+  # 1536 dims then mismatches the vector column and EVERY write fails with
+  # "expected 1280 dimensions, not 1536". stage_runtime installs gbrain, so the
+  # config has to exist by the end of this stage, not in stage_brain_init.
+  write_gbrain_config_json
+}
+
+# Write $GBRAIN_HOME/.gbrain/config.json. Merges, never clobbers: an existing
+# database_url holds the real Postgres password and must never be regenerated.
+# Idempotent, and the vendored product script merges over this same file later.
+write_gbrain_config_json() {
+  local dburl=""
+  [ -f "$BRAIN/.env" ] && dburl="$(sed -n 's/^GBRAIN_DATABASE_URL=//p' "$BRAIN/.env" | head -1)"
+  if [ -z "$dburl" ]; then
+    echo "NOTE: no GBRAIN_DATABASE_URL in $BRAIN/.env yet; skipping config.json write"
+    return 0
+  fi
+  mkdir -p "$GBRAIN_HOME/.gbrain"
+  python3 - "$GBRAIN_HOME/.gbrain/config.json" "$dburl" "$GBRAIN_EMBED_MODEL" "$GBRAIN_EMBED_DIMS" \
+           "$GBRAIN_CHAT_MODEL" "$GBRAIN_RERANKER_MODEL" <<'PY'
+import json, sys
+path, db_url, embed, dims, chat, reranker = sys.argv[1:7]
+try:
+    cfg = json.load(open(path))
+except Exception:
+    cfg = {}
+cfg.update({
+    "engine": "postgres",
+    "database_url": db_url,
+    "embedding_model": embed,
+    "embedding_dimensions": int(dims),
+    "chat_model": chat,
+    "reranker_model": reranker,
+})
+cfg.setdefault("schema_pack", "gbrain-base-v2")
+cfg.setdefault("mcp", {"publish_skills": True})
+# Self-upgrade stays OFF on every box. The weekly maintenance window is the only
+# path that changes a version, so a box can never move itself underneath us.
+cfg.setdefault("self_upgrade", {})["mode"] = "off"
+json.dump(cfg, open(path, "w"), indent=2)
+print("wrote " + path + " (file plane, before the first gbrain invocation)")
+PY
+  chmod 600 "$GBRAIN_HOME/.gbrain/config.json" 2>/dev/null || true
 }
 
 # =============================================================================
@@ -388,30 +489,56 @@ stage_runtime() {
   # globally symlinked or every non-interactive gbrain spawn dies (issue 21).
   have bun || { curl -fsSL https://bun.sh/install | bash; }
   [ -x /root/.bun/bin/bun ] && ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-  # gbrain: cloned + built from source (github.com/garrytan/gbrain), then symlinked
-  # globally. There is NO vendored install script; this is the canonical method from
-  # (the old orgo/setup/install-gbrain.sh path never existed; build from source)
-  if ! have gbrain; then
-    [ -d /opt/gbrain-src/.git ] || git clone https://github.com/garrytan/gbrain.git /opt/gbrain-src
-    ( cd /opt/gbrain-src && bun install && bun link )
+  # gbrain: LATEST from OUR FORK, every run. Not install-if-missing (a re-run
+  # then never upgrades and drift only accumulates), and not a hard pin (we want
+  # the latest fixes, and most of the recent ones came out of our own fleet).
+  #
+  # The actual gbrain plane is provisioned by the vendored product script in
+  # stage_brain_init, which does the install in the correct order (config.json
+  # BEFORE the first invocation against a fresh DB). Here we only make sure a
+  # usable gbrain binary and the global symlink exist for the stages in between,
+  # and we enforce the floor.
+  install_gbrain() {
+    # bun's global resolver reports a bogus DependencyLoop when the same package
+    # name is already installed from a different source (upstream vs fork).
+    # Remove the old global first.
+    bun remove -g gbrain >/dev/null 2>&1 || true
+    bun install -g "$GBRAIN_PKG" || echo "NOTE: bun install -g $GBRAIN_PKG returned nonzero"
+    # bun blocks postinstall hooks by default; the postinstall runs migrations.
+    bun pm -g trust gbrain >/dev/null 2>&1 || true
+  }
+  install_gbrain
+  # Global symlink OUTSIDE any conditional: a legacy box can already have gbrain
+  # on /root/.bun/bin, and non-login shells (supervisor, cron) still could not
+  # find it (validated live 2026-07-10 on the Atomic Stays rebuild).
+  ln -sf "$(command -v gbrain 2>/dev/null || echo /root/.bun/bin/gbrain)" /usr/local/bin/gbrain 2>/dev/null || true
+  # THE FLOOR. Below it the box is broken in ways doctor reports as healthy, so
+  # this fails the install rather than continuing. Retired legacy path: the old
+  # /opt/gbrain-src clone of upstream garrytan/gbrain is no longer used.
+  GBRAIN_VER="$(gbrain --version 2>/dev/null | awk '{print $NF}')"
+  if [ -z "$GBRAIN_VER" ]; then
+    fail_stage "gbrain is not on PATH after install from $GBRAIN_PKG"; return 1
   fi
-  # Global symlink OUTSIDE the install-if-missing block: a legacy box can already
-  # have gbrain on /root/.bun/bin (bun global install), in which case the block is
-  # skipped and non-login shells (supervisor, cron) still could not find gbrain
-  # (validated live 2026-07-10 on the Atomic Stays rebuild).
-  [ -e /usr/local/bin/gbrain ] \
-    || ln -sf "$(command -v gbrain 2>/dev/null || echo /root/.bun/bin/gbrain)" /usr/local/bin/gbrain 2>/dev/null || true
+  if ! version_ge "$GBRAIN_VER" "$GBRAIN_MIN_VERSION"; then
+    echo "FAIL: gbrain $GBRAIN_VER is below the required floor $GBRAIN_MIN_VERSION."
+    echo "      Below the floor, dream/extract silently produce zero takes on this box."
+    echo "      Fix the fork ($GBRAIN_PKG), do not lower the floor."
+    fail_stage "gbrain version floor"; return 1
+  fi
+  echo "gbrain $GBRAIN_VER from $GBRAIN_PKG (floor $GBRAIN_MIN_VERSION, ok)"
   # hermes: setup-hermes.sh lives at scripts/ (NOT orgo/setup/). Run BARE so a pipe
   # cannot mask its exit code (issue 4).
   if ! have hermes; then
     bash "$REPO/scripts/setup-hermes.sh" || echo "VERIFY: setup-hermes.sh exit + symlink"
+  else
+    # A re-run UPGRADES. Legacy boxes arrive with an old hermes already on PATH,
+    # and install-if-missing left them thousands of commits behind (validated
+    # live 2026-07-14 fleet migration: 0.16 boxes kept 0.16, gateway then FATAL
+    # on the 0.18 config). Version changes are otherwise only made in the weekly
+    # maintenance window.
+    hermes update || echo "NOTE: hermes update returned nonzero (keeping the installed build)"
   fi
-  # Legacy boxes arrive with an old hermes already on PATH; install-if-missing
-  # leaves them thousands of commits behind (validated live 2026-07-14 fleet
-  # migration: 0.16 boxes kept 0.16, gateway then FATAL on the 0.18 config).
-  if [ -n "${HERMES_VERSION:-}" ] && ! hermes --version 2>/dev/null | grep -q "v${HERMES_VERSION%.*}"; then
-    hermes update || echo "VERIFY: hermes update to $HERMES_VERSION"
-  fi
+  have hermes || fail_stage "hermes not on PATH after setup"
   # The 0.18 whatsapp adapter resolves its bridge from the hermes-agent venv's
   # site-packages/scripts, which the package does not ship; and the adapter
   # imports aiohttp, also absent from the uv venv (both validated live 2026-07-14).
@@ -437,10 +564,67 @@ stage_brain_init() {
     mv /root/.gbrain "/root/.gbrain.pre-v2.$(date +%s)"
     echo "legacy pglite gbrain config moved aside (fresh init)"
   fi
+  # Config.json is already on disk from stage_brain_db (pitfall 10 ordering).
+  # Re-run the writer anyway: this stage can be invoked on its own, and the
+  # merge is cheap and idempotent.
+  write_gbrain_config_json
   # Embedding model MUST be named at init so the vector column is the right width.
   # (Flag validated live 2026-07-10: gbrain 0.42 accepts --url and --embedding-model.)
   gbrain init --url "$GBRAIN_DATABASE_URL" --embedding-model "$GBRAIN_EMBED_MODEL" \
-    || echo "VERIFY: gbrain init flags for the Postgres path"
+    || echo "NOTE: gbrain init returned nonzero (already initialized is normal on a re-run)"
+
+  # THE PRODUCT'S OWN RECIPE. orgo/gbrain-recipe/vm-hermes-setup.sh is a verbatim
+  # copy of scripts/vm-hermes-setup.sh from togorashi45/gbrain: file-plane config,
+  # fork install, the DB-plane model mirror, MCP registration, doctor. Vendored
+  # so provisioning never depends on network state at install time. Provenance
+  # and the refresh path are in orgo/gbrain-recipe/VENDOR.md. Do not hand edit
+  # it; our overrides run after it.
+  local VM="$REPO/orgo/gbrain-recipe/vm-hermes-setup.sh"
+  if [ -f "$VM" ]; then
+    GBRAIN_HOME="$GBRAIN_HOME" \
+    DATABASE_URL="$GBRAIN_DATABASE_URL" \
+    GBRAIN_PKG="$GBRAIN_PKG" \
+    CHAT_MODEL="$GBRAIN_CHAT_MODEL" \
+    EMBED_MODEL="$GBRAIN_EMBED_MODEL" \
+    EMBED_DIMS="$GBRAIN_EMBED_DIMS" \
+    RERANKER_MODEL="$GBRAIN_RERANKER_MODEL" \
+    HERMES_CONFIG=/root/.hermes/config.yaml \
+      bash "$VM" || fail_stage "vendored vm-hermes-setup.sh"
+    # The vendored script registers gbrain as a STDIO MCP server. Our boxes run
+    # the native HTTP endpoint instead (proven on the live fleet), so
+    # stage_hermes_config replaces that entry. Both cannot coexist under one key
+    # and the HTTP one wins.
+  else
+    fail_stage "vendored vm-hermes-setup.sh missing at $VM (run stage_repo first)"
+  fi
+
+  # Re-assert the floor AFTER the vendored install, which is the step that
+  # actually moves the version.
+  local V; V="$(gbrain --version 2>/dev/null | awk '{print $NF}')"
+  if [ -z "$V" ] || ! version_ge "$V" "$GBRAIN_MIN_VERSION"; then
+    echo "FAIL: gbrain ${V:-missing} is below the floor $GBRAIN_MIN_VERSION after the vendored install."
+    fail_stage "gbrain version floor after vm-hermes-setup"
+  else
+    echo "gbrain $V clears the floor $GBRAIN_MIN_VERSION"
+  fi
+
+  # SPEND GATES. gbrain ships these and we had every one of them unset when the
+  # OpenRouter balance hit zero on 2026-08-01. Setting them explicitly is worth
+  # more than the numbers: a stated posture is auditable and does not move when
+  # a product default changes.
+  #   spend.posture=gated                   gates enforce. Never tokenmax on a client box.
+  #   sync.cost_gate_min_usd=0.50           product default. Above it a non-TTY sync
+  #                                         defers embeds to capped backfill jobs
+  #                                         instead of wedging the cron.
+  #   embed.backfill_max_usd=5              per job. Our corpora are small; a job
+  #                                         that wants more than $5 is a bug, not a big brain.
+  #   embed.backfill_max_usd_per_source_24h=10   a runaway loop stops at $10 a day
+  #                                         per source, not the $25 default.
+  gbrain config set spend.posture gated                          2>/dev/null || echo "NOTE: spend.posture set failed"
+  gbrain config set sync.cost_gate_min_usd 0.50                  2>/dev/null || echo "NOTE: sync.cost_gate_min_usd set failed"
+  gbrain config set embed.backfill_max_usd 5                     2>/dev/null || echo "NOTE: embed.backfill_max_usd set failed"
+  gbrain config set embed.backfill_max_usd_per_source_24h 10     2>/dev/null || echo "NOTE: embed.backfill_max_usd_per_source_24h set failed"
+
   gbrain config set sync.repo_path "$BRAIN/repo" 2>/dev/null || true
   # gbrain >=0.42 resolves the sync path from the DB-backed sources table, and a
   # re-init against a recreated DB leaves the default source with a NULL
@@ -481,7 +665,85 @@ stage_hermes_config() {
   # the default profile so real ingest runs are not killed (learned live on the fleet).
   hermes config set cron.script_timeout_seconds 1800 2>/dev/null || true
   [ -n "$OLLAMA_API_KEY" ] && hermes auth add ollama-cloud --type api-key --key "$OLLAMA_API_KEY" 2>/dev/null || true
-  # gbrain wired as a URL MCP (not stdio) once the HTTP/serve endpoint is up. VERIFY endpoint per gbrain version.
+
+  # ---- gbrain MCP: the native HTTP endpoint --------------------------------
+  # This used to be a comment and nothing else, which is why every box that
+  # worked was hand wired. config/toolset-policy.yaml lists `brain` as an
+  # always-on hot toolset and email-ingest.sh hard errors without a put_page
+  # tool, so on a strictly per-script fresh install the flagship email sense
+  # could not store anything.
+  #
+  # HTTP, not stdio. gbrain serves a native MCP endpoint at /mcp with bearer
+  # auth. That is what runs on the live fleet, so that is what we provision.
+  # The vendored product script registers the stdio variant by default; the
+  # block below overwrites it.
+  set -a; [ -f "$BRAIN/.env" ] && . "$BRAIN/.env"; set +a
+  export GBRAIN_HOME="$BRAIN"
+  local GB_PORT="${GBRAIN_HTTP_PORT:-3131}"
+  if [ -z "${GBRAIN_DATABASE_URL:-}" ]; then
+    echo "SKIP: no GBRAIN_DATABASE_URL in $BRAIN/.env; cannot wire the gbrain MCP (run stage_brain_db)"
+  else
+    # Supervised serve process. GBRAIN_ADMIN_BOOTSTRAP_TOKEN is generated once in
+    # stage_brain_db and persists in $BRAIN/.env, so the token survives a restart
+    # and never has to be scraped out of a log. --suppress-bootstrap-token keeps
+    # it out of the supervisor log entirely.
+    cat >/etc/supervisor/conf.d/gbrain-http.conf <<EOF
+[program:gbrain-http]
+command=/bin/bash -lc 'set -a; . ${BRAIN}/.env; set +a; export GBRAIN_HOME=${BRAIN}; exec /usr/local/bin/gbrain serve --http --port ${GB_PORT} --bind 127.0.0.1 --suppress-bootstrap-token'
+autostart=true
+autorestart=true
+startsecs=8
+stdout_logfile=/var/log/gbrain-http.log
+stderr_logfile=/var/log/gbrain-http.err
+EOF
+    supervisorctl reread; supervisorctl update
+    supervisorctl restart gbrain-http 2>/dev/null || supervisorctl start gbrain-http 2>/dev/null || true
+
+    # A dedicated MCP token, not the admin bootstrap token. `gbrain auth create`
+    # is idempotent by name only in the sense that it mints a new one each time,
+    # so persist the first one in $BRAIN/.env and reuse it on every re-run.
+    if ! grep -q '^GBRAIN_MCP_TOKEN=' "$BRAIN/.env" 2>/dev/null; then
+      local TOK
+      # A token by this name can exist from a previous generation with its value
+      # lost (create prints it once). Revoke, then mint, so the box always holds
+      # a token it actually knows.
+      gbrain auth revoke "hermes-${CLIENT_SLUG}" >/dev/null 2>&1 || true
+      TOK="$(gbrain auth create "hermes-${CLIENT_SLUG}" 2>/dev/null | grep -oE 'gbrain_[a-f0-9]{64}' | head -1)"
+      if [ -n "$TOK" ]; then
+        echo "GBRAIN_MCP_TOKEN=$TOK" >> "$BRAIN/.env"
+        chmod 600 "$BRAIN/.env"
+        echo "minted a gbrain MCP token for hermes-${CLIENT_SLUG} (stored in $BRAIN/.env)"
+      else
+        echo "NOTE: could not mint a gbrain MCP token; falling back to the admin bootstrap token"
+      fi
+      set -a; . "$BRAIN/.env"; set +a
+    fi
+    local MCP_TOKEN="${GBRAIN_MCP_TOKEN:-${GBRAIN_ADMIN_BOOTSTRAP_TOKEN:-}}"
+    if [ -z "$MCP_TOKEN" ]; then
+      fail_stage "no gbrain MCP token available; Hermes would get zero brain tools"
+    else
+      GBRAIN_MCP_URL="http://127.0.0.1:${GB_PORT}/mcp" GBRAIN_MCP_TOKEN="$MCP_TOKEN" python3 - <<'PY'
+import os, yaml
+cfg_path = "/root/.hermes/config.yaml"
+cfg = {}
+if os.path.exists(cfg_path):
+    cfg = yaml.safe_load(open(cfg_path)) or {}
+mcp = cfg.setdefault("mcp_servers", {})
+# Timeouts are deliberate. A cold brain answers the first tools/list slowly and
+# the default is short enough to look like "0 tools".
+mcp["gbrain"] = {
+    "url": os.environ["GBRAIN_MCP_URL"],
+    "headers": {"Authorization": "Bearer " + os.environ["GBRAIN_MCP_TOKEN"]},
+    "timeout": 120,
+    "connect_timeout": 30,
+    "enabled": True,
+}
+yaml.safe_dump(cfg, open(cfg_path, "w"), default_flow_style=False, sort_keys=False)
+print("hermes config: mcp_servers.gbrain wired to " + os.environ["GBRAIN_MCP_URL"] + " (http + bearer)")
+PY
+      chmod 600 /root/.hermes/config.yaml 2>/dev/null || true
+    fi
+  fi
 }
 
 # =============================================================================
@@ -653,9 +915,12 @@ stage_cron() {
   mkdir -p "$SD" "$BS"
 
   # 1. shell routines -> default scripts dir (cron resolves --script relative to $HERMES_HOME/scripts)
-  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh gbrain-dream.sh gbrain-hygiene.sh; do
+  for s in email-ingest.sh email-ingest-cron.sh ingest-retry.sh calendar-sync.sh ghl-sync.sh \
+           gbrain-dream.sh gbrain-hygiene.sh gbrain-smoke.sh gbrain-weekly-maintenance.sh; do
     [ -f "$R/$s" ] && install -m 755 "$R/$s" "$SD/$s"
   done
+  # 1b. shared helpers the routines source (heartbeat append to the integrations plane)
+  [ -f "$R/lib/heartbeat.sh" ] && install -D -m 644 "$R/lib/heartbeat.sh" "$SD/lib/heartbeat.sh"
   # 2. deterministic python collectors -> /opt/brain/scripts (what calendar-sync/ghl-sync call)
   for p in calendar-collect.py ghl-collect.py; do
     [ -f "$R/$p" ] && install -m 755 "$R/$p" "$BS/$p"
@@ -676,10 +941,13 @@ stage_cron() {
     hermes cron create "0 * * * *" --name ghl-sync --script ghl-sync.sh --no-agent --deliver local 2>&1 | tail -1 \
       || echo "VERIFY: hermes cron create ghl-sync"
   fi
-  # gbrain-dream: nightly brain compaction. Needs the OpenRouter key (same one gbrain
-  # embeds/dreams with); runs against Postgres so no brain-server stop is needed.
+  # gbrain-dream: brain compaction EVERY 6 HOURS, not daily. cycle_freshness
+  # warns past 6h and fails at 24h, so a daily dream leaves the brain fresh only
+  # 6h out of 24 and doctor decays 100 to 95 every evening. Fix the cadence, not
+  # the threshold: the check is honest and staleness compounds. Dream phases are
+  # incremental, so steady-state cost is small.
   if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-    hermes cron create "0 9 * * *" --name gbrain-dream --script gbrain-dream.sh --no-agent --deliver local 2>&1 | tail -1 \
+    hermes cron create "5 */6 * * *" --name gbrain-dream --script gbrain-dream.sh --no-agent --deliver local 2>&1 | tail -1 \
       || echo "VERIFY: hermes cron create gbrain-dream"
   else
     echo "NOTE: OPENROUTER_API_KEY unset; skipping gbrain-dream (dream needs it)."
@@ -688,6 +956,46 @@ stage_cron() {
   # contradictions), zero LLM cost; writes areas/brain-hygiene/latest.md.
   hermes cron create "0 13 * * 1" --name gbrain-hygiene --script gbrain-hygiene.sh --no-agent --deliver local 2>&1 | tail -1 \
     || echo "VERIFY: hermes cron create gbrain-hygiene"
+
+  # WEEKLY MAINTENANCE WINDOW: canary Saturday, fleet Sunday.
+  # The canary upgrades first and soaks about 24h. The Sunday fleet run is gated
+  # on the canary's doctor score not regressing. Sunday-night-only was rejected:
+  # a bad upgrade would land with no buffer before Monday. This window is the
+  # ONLY path that changes a gbrain or Hermes version on any box; self-upgrade
+  # stays off everywhere (see write_gbrain_config_json).
+  #
+  # hermes cron create, never a hand-edited crontab. Hermes owns the box crontab.
+  #
+  # Fork sync note: "latest from our fork" goes stale unless togorashi45/gbrain is
+  # merged from upstream garrytan/gbrain on a recurring basis. That merge is a
+  # repo job, not a box job, and nothing here does it for us.
+  {
+    echo "MAINT_ROLE=${MAINT_ROLE}"
+    [ -n "${MAINT_GATE_URL}" ]            && echo "MAINT_GATE_URL=${MAINT_GATE_URL}"
+    [ -n "${MAINT_GATE_PUBLISH_URL}" ]    && echo "MAINT_GATE_PUBLISH_URL=${MAINT_GATE_PUBLISH_URL}"
+    [ -n "${MAINT_GATE_PUBLISH_SECRET}" ] && echo "MAINT_GATE_PUBLISH_SECRET=${MAINT_GATE_PUBLISH_SECRET}"
+    echo "GBRAIN_MIN_VERSION=${GBRAIN_MIN_VERSION}"
+    echo "GBRAIN_PKG=${GBRAIN_PKG}"
+  } > "$BRAIN/.maintenance.env"
+  chmod 600 "$BRAIN/.maintenance.env"
+  # The routine reads /opt/brain/.env, so append the maintenance settings there
+  # too (idempotent: replace the block rather than stacking duplicates).
+  sed -i '/^MAINT_ROLE=/d;/^MAINT_GATE_URL=/d;/^MAINT_GATE_PUBLISH_URL=/d;/^MAINT_GATE_PUBLISH_SECRET=/d;/^GBRAIN_MIN_VERSION=/d;/^GBRAIN_PKG=/d' "$BRAIN/.env" 2>/dev/null || true
+  cat "$BRAIN/.maintenance.env" >> "$BRAIN/.env"
+  chmod 600 "$BRAIN/.env"
+  if [ "${MAINT_ROLE}" = "canary" ]; then
+    hermes cron create "0 8 * * 6" --name gbrain-maintenance --script gbrain-weekly-maintenance.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create gbrain-maintenance (canary, Saturday)"
+    echo "maintenance: CANARY, Saturday 08:00 UTC. It publishes the gate the fleet reads."
+  else
+    hermes cron create "0 8 * * 0" --name gbrain-maintenance --script gbrain-weekly-maintenance.sh --no-agent --deliver local 2>&1 | tail -1 \
+      || echo "VERIFY: hermes cron create gbrain-maintenance (fleet, Sunday)"
+    if [ -z "${MAINT_GATE_URL}" ]; then
+      echo "maintenance: FLEET, Sunday 08:00 UTC. MAINT_GATE_URL is unset, so this box runs checks only and never upgrades (fail closed)."
+    else
+      echo "maintenance: FLEET, Sunday 08:00 UTC, gated on the canary verdict at ${MAINT_GATE_URL}."
+    fi
+  fi
   echo "cron jobs registered (default profile):"; hermes cron list 2>/dev/null | grep -E "Name:|Next run:" || true
 }
 
@@ -712,13 +1020,79 @@ EOF
 
 # =============================================================================
 stage_verify() {
-  say "STAGE verify"
+  say "STAGE verify: doctor score + live smoke, gated"
+  # The old verify ran `gbrain query | head -3` with `|| echo not ready`. An exit
+  # code is not proof and a returned count is not data. It passed every day the
+  # fleet was producing zero takes. This one gates the install.
   echo "supervisor:"; supervisorctl status 2>/dev/null || true
   echo "postgres:"; sudo -u postgres psql -d brain -tAc "SELECT count(*) FROM pg_extension WHERE extname='vector';" 2>/dev/null
-  have gbrain && gbrain query "$CLIENT_SLUG" 2>/dev/null | head -3 || echo "gbrain not ready"
+
+  export GBRAIN_HOME="$BRAIN"
+  set -a; [ -f "$BRAIN/.env" ] && . "$BRAIN/.env"; set +a
+  export GBRAIN_HOME="$BRAIN"
+
+  if ! have gbrain; then fail_stage "gbrain not installed"; return 1; fi
+
+  # 1. version floor
+  local V; V="$(gbrain --version 2>/dev/null | awk '{print $NF}')"
+  if [ -z "$V" ] || ! version_ge "$V" "$GBRAIN_MIN_VERSION"; then
+    fail_stage "gbrain ${V:-missing} below floor $GBRAIN_MIN_VERSION"
+  else
+    echo "verify: gbrain $V (floor $GBRAIN_MIN_VERSION, ok)"
+  fi
+
+  # 2. doctor, with the SCORE captured. Threshold is a warn, not a pass: doctor
+  #    can be green while a model id is subtly wrong, which is why step 4 exists.
+  local SCORE
+  SCORE="$(gbrain doctor 2>&1 | tee /tmp/doctor-verify.log | sed -n 's/^Overall health score: \([0-9][0-9]*\)\/100.*/\1/p' | tail -1)"
+  tail -25 /tmp/doctor-verify.log
+  local MIN_SCORE="${GBRAIN_MIN_DOCTOR_SCORE:-80}"
+  if [ -z "$SCORE" ]; then
+    fail_stage "gbrain doctor produced no score (it did not run)"
+  elif [ "$SCORE" -lt "$MIN_SCORE" ]; then
+    fail_stage "gbrain doctor $SCORE/100 is below the $MIN_SCORE gate"
+  else
+    echo "verify: doctor $SCORE/100"
+  fi
+
+  # 3. the model keys that decide whether extraction runs at all
+  for k in models.chat models.tier.reasoning models.dream.extract_atoms; do
+    local kv; kv="$(gbrain config get "$k" 2>/dev/null | tail -1)"
+    case "$kv" in
+      *openrouter:*) echo "verify: $k = $kv" ;;
+      *) fail_stage "$k is '${kv:-unset}', expected an openrouter model" ;;
+    esac
+  done
+
+  # 4. LIVE SMOKE: page in, extraction, takes count GREW. This is the only check
+  #    that would have caught the zero-takes failure.
+  if [ -x /root/.hermes/scripts/gbrain-smoke.sh ]; then
+    bash /root/.hermes/scripts/gbrain-smoke.sh || fail_stage "live smoke test (page -> extract -> takes did not grow)"
+  else
+    fail_stage "gbrain-smoke.sh not deployed (run stage_cron)"
+  fi
+
+  # 5. the brain MCP actually answers on the wired url
+  local GB_PORT="${GBRAIN_HTTP_PORT:-3131}"
+  if curl -fsS --max-time 15 -o /dev/null \
+       -H "Authorization: Bearer ${GBRAIN_MCP_TOKEN:-${GBRAIN_ADMIN_BOOTSTRAP_TOKEN:-}}" \
+       "http://127.0.0.1:${GB_PORT}/mcp" 2>/dev/null; then
+    echo "verify: gbrain MCP endpoint answering on :${GB_PORT}"
+  else
+    # A bare GET on /mcp is not a full handshake, so a non-2xx here is only a
+    # signal. What matters is that the port is listening and the process is up.
+    supervisorctl status gbrain-http 2>/dev/null | grep -q RUNNING \
+      && echo "verify: gbrain-http RUNNING (endpoint did not answer a bare GET, which is expected for MCP)" \
+      || fail_stage "gbrain-http is not running; Hermes will bind zero brain tools"
+  fi
+
+  # 6. integrations plane: our routines now write heartbeats, so this should show
+  #    real state instead of AVAILABLE across the board.
+  gbrain integrations doctor 2>&1 | tail -20 || echo "NOTE: gbrain integrations doctor unavailable on this build"
+
   # Stage 5 report: health checks + seed first task + Slack note + portal tile.
   if [ -f "$REPO/orgo/report-readiness.py" ]; then
-    CLIENT_SLUG="$CLIENT_SLUG" python3 "$REPO/orgo/report-readiness.py" --no-seed || echo "VERIFY: report-readiness (seed/slack/portal env on first run)"
+    CLIENT_SLUG="$CLIENT_SLUG" python3 "$REPO/orgo/report-readiness.py" --no-seed || echo "NOTE: report-readiness (seed/slack/portal env on first run)"
   fi
   echo "READINESS: brain extension present, supervisor programs up, SOUL deployed, skills profile applied."
 }
@@ -1009,5 +1383,33 @@ EOF
 # Connections tab is the client-facing connect surface now. Run it explicitly if needed.
 ALL=(base harden_boot brain_db backup composio_project repo runtime brain_init hermes_config composio_mcp identity skills channels email cron onboard gateway portal health verify)
 TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("${ALL[@]}")
-for t in "${TARGETS[@]}"; do "stage_${t}"; done
+
+# --verify / verify: doctor plus the live smoke, nothing else. Mirrors the
+# product's `vm-hermes-setup.sh --verify`. Use it to check a box without
+# reprovisioning it.
+if [ "${TARGETS[0]}" = "--verify" ]; then TARGETS=(verify); fi
+
+for t in "${TARGETS[@]}"; do
+  if ! declare -F "stage_${t}" >/dev/null; then
+    echo "FAIL: no such stage: $t"; STAGE_FAILED=$((STAGE_FAILED + 1))
+    STAGE_RESULTS="${STAGE_RESULTS}\n  UNKNOWN  ${t}"
+    continue
+  fi
+  BEFORE_FAILED=$STAGE_FAILED
+  "stage_${t}"
+  if [ "$STAGE_FAILED" -gt "$BEFORE_FAILED" ]; then
+    STAGE_RESULTS="${STAGE_RESULTS}\n  FAIL     ${t}  ($((STAGE_FAILED - BEFORE_FAILED)) failure(s))"
+  else
+    STAGE_RESULTS="${STAGE_RESULTS}\n  ok       ${t}"
+  fi
+done
+
+echo
+echo "---- stage tally ----"
+printf '%b\n' "$STAGE_RESULTS"
+if [ "$STAGE_FAILED" -ne 0 ]; then
+  echo "================ install-box FAILED $(date -u) ================"
+  echo "One or more stages failed. This box is NOT ready. See the FAIL lines above."
+  exit 1
+fi
 echo "================ install-box done $(date -u) ================"
